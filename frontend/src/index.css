@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+body {
+  background-color: #f8fafc;
+}
+
+@keyframes breathe {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5; /* Fica meio transparente */
+    transform: scale(1.05); /* Cresce um pouquinho (5%) */
+  }
+}
+
+/* Classe utilitária para usar no React */
+.animate-logo-breathe {
+  animation: breathe 2s ease-in-out infinite;
+}
