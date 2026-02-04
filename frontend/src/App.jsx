@@ -42,7 +42,7 @@ function App() {
     setLoading(true);
     try {
       // AJUSTE AQUI SEU IP SE MUDAR
-      const BASE_API = "http://192.168.1.151:8000";
+      const BASE_API = "https://api-viadoterno.onrender.com";
 
       if (abaAtiva === 'analitico') {
         const res = await axios.get(`${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`);
@@ -193,7 +193,7 @@ function LoginPage({ onLoginSuccess }) {
 
     try {
       // AJUSTE SEU IP AQUI TBM
-      await axios.post('http://192.168.1.151:8000/api/login', { username, password });
+      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
 
       // Se deu certo:
       localStorage.setItem('via_token', 'logado_com_sucesso');
