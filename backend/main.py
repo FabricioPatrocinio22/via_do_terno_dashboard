@@ -72,7 +72,8 @@ def get_mes_atual_data(meta_mensal: float = 50000):
     proximo_mes = hoje.replace(day=28) + timedelta(days=4)
     ultimo_dia_mes = (proximo_mes - timedelta(days=proximo_mes.day)).day
     
-    vendas_por_dia = {dia: 0.0 for dia in range(1, ultimo_dia_mes + 1)}
+    # Agora cada dia começa com valor 0 e quantidade 0
+    vendas_por_dia = {dia: {"valor": 0.0, "qtd": 0} for dia in range(1, ultimo_dia_mes + 1)}
     
     pagina = 1
     continuar = True
@@ -104,9 +105,8 @@ def get_mes_atual_data(meta_mensal: float = 50000):
             situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
             if 'cancelado' in situacao: continue
             
-            vendas_por_dia[dt_pedido.day] += valor
-            total_faturamento += valor
-            total_pedidos += 1
+            vendas_por_dia[dt_pedido.day]["valor"] += valor
+            vendas_por_dia[dt_pedido.day]["qtd"] += 1  # Soma +1 pedido a cada iteração
             
             codigo_p = p_resumo.get('codigo')
             if codigo_p not in cache:
@@ -177,7 +177,14 @@ def get_mes_atual_data(meta_mensal: float = 50000):
         )
         produtos_drilldown[cat] = lista_ordenada
 
-    vendas_dia_lista = [{"dia": d, "valor": vendas_por_dia[d]} for d in range(1, ultimo_dia_mes + 1)]
+    vendas_dia_lista = [
+    {
+        "dia": d, 
+        "valor": vendas_por_dia[d]["valor"], 
+        "qtd": vendas_por_dia[d]["qtd"]
+    } 
+    for d in range(1, ultimo_dia_mes + 1)
+]
     
     categorias_lista = sorted(
         [{"nome": k, "valor": v, "percentual": (v/total_faturamento*100) if total_faturamento > 0 else 0} 

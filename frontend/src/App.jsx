@@ -16,7 +16,7 @@ function App() {
   const [periodoKpi, setPeriodoKpi] = useState(30);
   const [periodoGraficos, setPeriodoGraficos] = useState(30);
   const [abaAtiva, setAbaAtiva] = useState('analitico');
-  const [metaMensal, setMetaMensal] = useState(50000);
+  const [metaMensal, setMetaMensal] = useState(60000);
 
   // Customizações de Data
   const [modoKpiCustomizado, setModoKpiCustomizado] = useState(false);
@@ -373,8 +373,8 @@ function DashboardAnalitico({
           <button
             onClick={() => setModoKpiCustomizado(!modoKpiCustomizado)}
             className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${modoKpiCustomizado
-                ? 'bg-blue-100 text-blue-700'
-                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
               }`}
           >
             <Settings size={16} className="inline mr-2" />
@@ -470,8 +470,8 @@ function DashboardAnalitico({
           <button
             onClick={() => setModoGraficosCustomizado(!modoGraficosCustomizado)}
             className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${modoGraficosCustomizado
-                ? 'bg-emerald-100 text-emerald-700'
-                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              ? 'bg-emerald-100 text-emerald-700'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
               }`}
           >
             <Settings size={16} className="inline mr-2" />
@@ -586,26 +586,26 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
   // Lógica do Drill Down:
   // Se tem categoria selecionada, pega a lista dela. Se não, pega o Top 10 geral.
-  const listaProdutosExibida = categoriaSelecionada 
-    ? (graficos.produtos_por_categoria?.[categoriaSelecionada] || []) 
+  const listaProdutosExibida = categoriaSelecionada
+    ? (graficos.produtos_por_categoria?.[categoriaSelecionada] || [])
     : graficos.top_produtos;
 
-  const tituloProdutos = categoriaSelecionada 
-    ? `Top em ${categoriaSelecionada}` 
+  const tituloProdutos = categoriaSelecionada
+    ? `Top em ${categoriaSelecionada}`
     : "Top 10 Produtos (Geral)";
 
   return (
     <>
       {/* ... [MANTENHA O HEADER E OS KPIs DO MÊS IGUAIS AO ANTERIOR] ... */}
       {/* VOU REPETIR APENAS A PARTE DOS GRÁFICOS QUE MUDOU PARA VOCÊ COPIAR */}
-      
+
       {/* HEADER DO MÊS (Mantenha igual) */}
       <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 p-8 rounded-3xl shadow-lg mb-8 text-white">
         {/* ...conteúdo do header... */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-             <h2 className="text-3xl font-black mb-2">Performance do Mês</h2>
-             <p className="text-emerald-100 text-lg">{resumo.mes_ano}</p>
+            <h2 className="text-3xl font-black mb-2">Performance do Mês</h2>
+            <p className="text-emerald-100 text-lg">{resumo.mes_ano}</p>
           </div>
           <div className="bg-white/20 backdrop-blur-sm px-6 py-3 rounded-2xl">
             <p className="text-xs font-semibold mb-1 text-emerald-100">Meta Mensal</p>
@@ -615,22 +615,22 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
           </div>
         </div>
       </div>
-      
+
       {/* PROGRESS BAR E KPIs (Mantenha igual) */}
       <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 mb-8">
-         {/* ...código da barra de progresso... */}
-         <div className="flex justify-between items-end mb-4">
-            <div><h3 className="text-2xl font-black text-gray-900">{percentualProgresso.toFixed(1)}% da Meta</h3><p className="text-gray-500 text-sm mt-1">Faltam {formatMoney(resumo.falta_atingir)}</p></div>
-            <div className="text-right"><p className="text-xs text-gray-400 uppercase font-bold">Projeção</p><p className="text-xl font-black text-blue-600">{formatMoney(resumo.projecao_mes)}</p></div>
-         </div>
-         <div className="w-full bg-gray-200 h-8 rounded-full overflow-hidden relative"><div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-1000 flex items-center justify-end px-4" style={{ width: `${percentualProgresso}%` }}>{percentualProgresso > 10 && <span className="text-white font-black text-sm">{percentualProgresso.toFixed(0)}%</span>}</div></div>
-         {/* ...grid de infos dias... */}
-         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-            <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Decorridos</p><p className="text-2xl font-black text-gray-900">{resumo.dias_decorridos}</p></div>
-            <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Restantes</p><p className="text-2xl font-black text-gray-900">{resumo.dias_restantes}</p></div>
-            <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Média/Dia</p><p className="text-2xl font-black text-emerald-600">{formatMoney(resumo.media_dia)}</p></div>
-            <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Necessário/Dia</p><p className="text-2xl font-black text-orange-600">{formatMoney(resumo.dias_restantes > 0 ? resumo.falta_atingir / resumo.dias_restantes : 0)}</p></div>
-         </div>
+        {/* ...código da barra de progresso... */}
+        <div className="flex justify-between items-end mb-4">
+          <div><h3 className="text-2xl font-black text-gray-900">{percentualProgresso.toFixed(1)}% da Meta</h3><p className="text-gray-500 text-sm mt-1">Faltam {formatMoney(resumo.falta_atingir)}</p></div>
+          <div className="text-right"><p className="text-xs text-gray-400 uppercase font-bold">Projeção</p><p className="text-xl font-black text-blue-600">{formatMoney(resumo.projecao_mes)}</p></div>
+        </div>
+        <div className="w-full bg-gray-200 h-8 rounded-full overflow-hidden relative"><div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-1000 flex items-center justify-end px-4" style={{ width: `${percentualProgresso}%` }}>{percentualProgresso > 10 && <span className="text-white font-black text-sm">{percentualProgresso.toFixed(0)}%</span>}</div></div>
+        {/* ...grid de infos dias... */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Decorridos</p><p className="text-2xl font-black text-gray-900">{resumo.dias_decorridos}</p></div>
+          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Restantes</p><p className="text-2xl font-black text-gray-900">{resumo.dias_restantes}</p></div>
+          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Média/Dia</p><p className="text-2xl font-black text-emerald-600">{formatMoney(resumo.media_dia)}</p></div>
+          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Necessário/Dia</p><p className="text-2xl font-black text-orange-600">{formatMoney(resumo.dias_restantes > 0 ? resumo.falta_atingir / resumo.dias_restantes : 0)}</p></div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -641,16 +641,35 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
       {/* --- GRÁFICOS INTERATIVOS --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-        
+
         {/* GRÁFICO VENDAS POR DIA (2/3) */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 lg:col-span-2">
-           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600"><Calendar size={22} /> Vendas por Dia do Mês</h3>
-           <ResponsiveContainer width="100%" height={400}>
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600"><Calendar size={22} /> Vendas por Dia do Mês</h3>
+          <ResponsiveContainer width="100%" height={400}>
             <BarChart data={graficos.vendas_por_dia} margin={{ top: 20, right: 10, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="dia" axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v) => formatMoney(v)} contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} labelStyle={{ fontWeight: 'bold', color: '#1f2937' }} />
+              <Tooltip
+                // Formata o título do balãozinho para aparecer "Dia: X"
+                labelFormatter={(label) => `Dia: ${label}`}
+
+                // Adiciona a quantidade de pedidos e o valor formatado nas linhas do balão
+                formatter={(value, name) => {
+                  if (name === "valor") return [formatMoney(value), "Faturamento"];
+                  if (name === "qtd") return [value, "Pedidos"];
+                  return [value, name];
+                }}
+
+                contentStyle={{
+                  backgroundColor: 'white',
+                  borderRadius: '12px',
+                  border: '1px solid #e5e7eb',
+                  boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                }}
+                itemStyle={{ fontWeight: 'bold' }}
+                labelStyle={{ color: '#1f2937', fontWeight: 'black', marginBottom: '4px' }}
+              />
               <Bar dataKey="valor" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
             </BarChart>
           </ResponsiveContainer>
@@ -660,13 +679,13 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
         <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-100 transition-all duration-300 ${categoriaSelecionada ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`}>
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-lg flex items-center gap-2 text-orange-600 truncate pr-2">
-              <Award size={22} /> 
+              <Award size={22} />
               <span className="truncate" title={tituloProdutos}>{tituloProdutos}</span>
             </h3>
-            
+
             {/* Botão de Fechar Filtro */}
             {categoriaSelecionada && (
-              <button 
+              <button
                 onClick={() => setCategoriaSelecionada(null)}
                 className="p-1 bg-gray-100 rounded-full hover:bg-red-100 hover:text-red-600 transition-colors"
                 title="Limpar filtro"
@@ -688,7 +707,7 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
                 </div>
               ))
             ) : (
-               <p className="text-center text-gray-400 text-sm py-4">Nenhum produto encontrado nesta categoria.</p>
+              <p className="text-center text-gray-400 text-sm py-4">Nenhum produto encontrado nesta categoria.</p>
             )}
           </div>
         </div>
@@ -696,22 +715,22 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
       {/* --- SEGUNDA LINHA: CATEGORIAS E PAGAMENTO --- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        
+
         {/* GRÁFICO CATEGORIAS COM CLICK */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-center mb-6">
-             <h3 className="font-bold text-lg flex items-center gap-2 text-blue-600"><Tag size={22} /> Vendas por Categoria</h3>
-             {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique na barra para detalhar</span>}
+            <h3 className="font-bold text-lg flex items-center gap-2 text-blue-600"><Tag size={22} /> Vendas por Categoria</h3>
+            {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique na barra para detalhar</span>}
           </div>
-          
+
           <div className="space-y-4">
             {graficos.categorias.slice(0, 8).map((cat, i) => {
               const isSelected = categoriaSelecionada === cat.nome;
               return (
-                <div 
-                    key={i} 
-                    className={`flex flex-col gap-2 cursor-pointer group transition-all duration-200 ${isSelected ? 'opacity-100' : categoriaSelecionada ? 'opacity-40 hover:opacity-70' : ''}`}
-                    onClick={() => setCategoriaSelecionada(isSelected ? null : cat.nome)}
+                <div
+                  key={i}
+                  className={`flex flex-col gap-2 cursor-pointer group transition-all duration-200 ${isSelected ? 'opacity-100' : categoriaSelecionada ? 'opacity-40 hover:opacity-70' : ''}`}
+                  onClick={() => setCategoriaSelecionada(isSelected ? null : cat.nome)}
                 >
                   <div className="flex justify-between items-center text-sm">
                     <span className={`font-bold transition-colors ${isSelected ? 'text-blue-700' : 'text-gray-700 group-hover:text-blue-600'}`}>{cat.nome}</span>
@@ -721,9 +740,9 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
                     </div>
                   </div>
                   <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                    <div 
-                        className={`h-full rounded-full transition-all duration-500 ${isSelected ? 'bg-orange-500' : 'bg-blue-500 group-hover:bg-blue-400'}`} 
-                        style={{ width: `${cat.percentual}%` }} 
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${isSelected ? 'bg-orange-500' : 'bg-blue-500 group-hover:bg-blue-400'}`}
+                      style={{ width: `${cat.percentual}%` }}
                     />
                   </div>
                 </div>
@@ -748,31 +767,31 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
       {/* Pedidos Recentes (Mantenha igual) */}
       <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-         <h3 className="font-bold text-lg mb-6 text-gray-900">Pedidos Recentes</h3>
-         <div className="overflow-x-auto">
-            <table className="w-full">
-               <thead>
-                  <tr className="border-b-2 border-gray-200">
-                     <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Código</th>
-                     <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Data</th>
-                     <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Cliente</th>
-                     <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Situação</th>
-                     <th className="text-right py-3 px-4 text-xs font-bold text-gray-500 uppercase">Valor</th>
-                  </tr>
-               </thead>
-               <tbody>
-                  {pedidos_recentes.map((pedido, i) => (
-                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                        <td className="py-3 px-4 font-mono text-sm font-bold text-gray-700">{pedido.codigo}</td>
-                        <td className="py-3 px-4 text-sm text-gray-600">{pedido.data}</td>
-                        <td className="py-3 px-4 text-sm text-gray-600 truncate max-w-xs">{pedido.cliente}</td>
-                        <td className="py-3 px-4"><span className="text-xs font-bold px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full">{pedido.situacao}</span></td>
-                        <td className="py-3 px-4 text-right font-bold text-gray-900">{formatMoney(pedido.valor)}</td>
-                     </tr>
-                  ))}
-               </tbody>
-            </table>
-         </div>
+        <h3 className="font-bold text-lg mb-6 text-gray-900">Pedidos Recentes</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b-2 border-gray-200">
+                <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Código</th>
+                <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Data</th>
+                <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Cliente</th>
+                <th className="text-left py-3 px-4 text-xs font-bold text-gray-500 uppercase">Situação</th>
+                <th className="text-right py-3 px-4 text-xs font-bold text-gray-500 uppercase">Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pedidos_recentes.map((pedido, i) => (
+                <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-4 font-mono text-sm font-bold text-gray-700">{pedido.codigo}</td>
+                  <td className="py-3 px-4 text-sm text-gray-600">{pedido.data}</td>
+                  <td className="py-3 px-4 text-sm text-gray-600 truncate max-w-xs">{pedido.cliente}</td>
+                  <td className="py-3 px-4"><span className="text-xs font-bold px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full">{pedido.situacao}</span></td>
+                  <td className="py-3 px-4 text-right font-bold text-gray-900">{formatMoney(pedido.valor)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   );
