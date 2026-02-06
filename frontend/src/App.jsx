@@ -574,18 +574,37 @@ function DashboardAnalitico({
   );
 }
 
-// === COMPONENTE: Dashboard Mês Atual (Com Drill Down) ===
+// === COMPONENTE: Dashboard Mês Atual (CORRIGIDO) ===
+// === COMPONENTE: Dashboard Mês Atual (CORRIGIDO) ===
 function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
-  // ESTADO NOVO: Controla qual categoria foi clicada
   const [categoriaSelecionada, setCategoriaSelecionada] = useState(null);
 
   if (!data) return <div className="text-center text-gray-500 py-10">Carregando dados do mês...</div>;
 
   const { resumo, graficos, pedidos_recentes } = data;
-  const percentualProgresso = Math.min(100, resumo.percentual_meta);
 
-  // Lógica do Drill Down:
-  // Se tem categoria selecionada, pega a lista dela. Se não, pega o Top 10 geral.
+  // --- CÁLCULOS NO FRONTEND (CORREÇÃO) ---
+  // Garantimos que os números sejam tratados como números
+  const faturamentoAtual = Number(resumo.total_faturamento) || 0;
+  const diasDecorridos = Number(resumo.dias_decorridos) || 1; 
+  const diasRestantes = Number(resumo.dias_restantes) || 0;
+  const diasTotais = diasDecorridos + diasRestantes;
+
+  // 1. Média Diária Real (Faturamento / Dias que já passaram)
+  const mediaDiaCalculada = diasDecorridos > 0 ? faturamentoAtual / diasDecorridos : 0;
+
+  // 2. Projeção (Média Diária * Dias Totais do Mês)
+  const projecaoCalculada = mediaDiaCalculada * diasTotais;
+
+  // 3. Percentual da Meta (Faturamento / Meta Definida pelo usuário)
+  const percentualProgresso = metaMensal > 0 ? (faturamentoAtual / metaMensal) * 100 : 0;
+  const percentualBarra = Math.min(100, percentualProgresso);
+
+  // 4. Falta Atingir e Necessário por Dia
+  const faltaAtingir = Math.max(0, metaMensal - faturamentoAtual);
+  const necessarioDia = diasRestantes > 0 ? faltaAtingir / diasRestantes : 0;
+
+  // Lógica do Drill Down (Mantida igual)
   const listaProdutosExibida = categoriaSelecionada
     ? (graficos.produtos_por_categoria?.[categoriaSelecionada] || [])
     : graficos.top_produtos;
@@ -596,12 +615,8 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
   return (
     <>
-      {/* ... [MANTENHA O HEADER E OS KPIs DO MÊS IGUAIS AO ANTERIOR] ... */}
-      {/* VOU REPETIR APENAS A PARTE DOS GRÁFICOS QUE MUDOU PARA VOCÊ COPIAR */}
-
-      {/* HEADER DO MÊS (Mantenha igual) */}
+      {/* HEADER DO MÊS */}
       <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 p-8 rounded-3xl shadow-lg mb-8 text-white">
-        {/* ...conteúdo do header... */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h2 className="text-3xl font-black mb-2">Performance do Mês</h2>
@@ -610,39 +625,73 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
           <div className="bg-white/20 backdrop-blur-sm px-6 py-3 rounded-2xl">
             <p className="text-xs font-semibold mb-1 text-emerald-100">Meta Mensal</p>
             <div className="flex items-center gap-2">
-              <input type="number" value={metaMensal} onChange={(e) => setMetaMensal(Number(e.target.value))} className="bg-white text-emerald-700 font-black text-xl px-3 py-1 rounded-lg w-40 outline-none" />
+              <span className="text-emerald-100 font-bold">R$</span>
+              <input 
+                type="number" 
+                value={metaMensal} 
+                onChange={(e) => setMetaMensal(Number(e.target.value))} 
+                className="bg-transparent text-white font-black text-xl w-32 outline-none placeholder-emerald-200"
+              />
             </div>
           </div>
         </div>
       </div>
 
-      {/* PROGRESS BAR E KPIs (Mantenha igual) */}
+      {/* PROGRESS BAR E KPIs */}
       <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 mb-8">
-        {/* ...código da barra de progresso... */}
         <div className="flex justify-between items-end mb-4">
-          <div><h3 className="text-2xl font-black text-gray-900">{percentualProgresso.toFixed(1)}% da Meta</h3><p className="text-gray-500 text-sm mt-1">Faltam {formatMoney(resumo.falta_atingir)}</p></div>
-          <div className="text-right"><p className="text-xs text-gray-400 uppercase font-bold">Projeção</p><p className="text-xl font-black text-blue-600">{formatMoney(resumo.projecao_mes)}</p></div>
+          <div>
+            <h3 className="text-2xl font-black text-gray-900">{percentualProgresso.toFixed(1)}% da Meta</h3>
+            <p className="text-gray-500 text-sm mt-1">Faltam {formatMoney(faltaAtingir)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-gray-400 uppercase font-bold">Projeção</p>
+            {/* AQUI USAMOS A VARIÁVEL CALCULADA */}
+            <p className="text-xl font-black text-blue-600">{formatMoney(projecaoCalculada)}</p>
+          </div>
         </div>
-        <div className="w-full bg-gray-200 h-8 rounded-full overflow-hidden relative"><div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-1000 flex items-center justify-end px-4" style={{ width: `${percentualProgresso}%` }}>{percentualProgresso > 10 && <span className="text-white font-black text-sm">{percentualProgresso.toFixed(0)}%</span>}</div></div>
-        {/* ...grid de infos dias... */}
+        
+        {/* Barra de Progresso */}
+        <div className="w-full bg-gray-200 h-8 rounded-full overflow-hidden relative">
+          <div 
+            className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-1000 flex items-center justify-end px-4" 
+            style={{ width: `${percentualBarra}%` }}
+          >
+            {percentualBarra > 10 && <span className="text-white font-black text-sm">{percentualProgresso.toFixed(0)}%</span>}
+          </div>
+        </div>
+
+        {/* Grid de Infos Dias */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Decorridos</p><p className="text-2xl font-black text-gray-900">{resumo.dias_decorridos}</p></div>
-          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Dias Restantes</p><p className="text-2xl font-black text-gray-900">{resumo.dias_restantes}</p></div>
-          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Média/Dia</p><p className="text-2xl font-black text-emerald-600">{formatMoney(resumo.media_dia)}</p></div>
-          <div className="text-center"><p className="text-xs text-gray-400 uppercase font-bold">Necessário/Dia</p><p className="text-2xl font-black text-orange-600">{formatMoney(resumo.dias_restantes > 0 ? resumo.falta_atingir / resumo.dias_restantes : 0)}</p></div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400 uppercase font-bold">Dias Decorridos</p>
+            <p className="text-2xl font-black text-gray-900">{diasDecorridos}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400 uppercase font-bold">Dias Restantes</p>
+            <p className="text-2xl font-black text-gray-900">{diasRestantes}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400 uppercase font-bold">Média/Dia Atual</p>
+            {/* USANDO VARIÁVEL CALCULADA */}
+            <p className="text-2xl font-black text-emerald-600">{formatMoney(mediaDiaCalculada)}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400 uppercase font-bold">Necessário/Dia</p>
+            {/* USANDO VARIÁVEL CALCULADA */}
+            <p className="text-2xl font-black text-orange-600">{formatMoney(necessarioDia)}</p>
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <KpiCard title="Faturamento Total" value={formatMoney(resumo.total_faturamento)} icon={<DollarSign size={28} />} accent="emerald" />
+        <KpiCard title="Faturamento Total" value={formatMoney(faturamentoAtual)} icon={<DollarSign size={28} />} accent="emerald" />
         <KpiCard title="Total de Pedidos" value={resumo.total_pedidos} icon={<ShoppingBag size={28} />} accent="blue" />
         <KpiCard title="Ticket Médio" value={formatMoney(resumo.ticket_medio)} icon={<TrendingUp size={28} />} accent="violet" />
       </div>
 
-      {/* --- GRÁFICOS INTERATIVOS --- */}
+      {/* --- O RESTANTE DOS GRÁFICOS (Vendas por dia, Categorias, etc) PERMANECE IGUAL --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-
-        {/* GRÁFICO VENDAS POR DIA (2/3) */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 lg:col-span-2">
           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600"><Calendar size={22} /> Vendas por Dia do Mês</h3>
           <ResponsiveContainer width="100%" height={400}>
@@ -651,50 +700,32 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
               <XAxis dataKey="dia" axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
               <Tooltip
-                // Formata o título do balãozinho para aparecer "Dia: X"
                 labelFormatter={(label) => `Dia: ${label}`}
-
-                // Adiciona a quantidade de pedidos e o valor formatado nas linhas do balão
                 formatter={(value, name) => {
                   if (name === "valor") return [formatMoney(value), "Faturamento"];
                   if (name === "qtd") return [value, "Pedidos"];
                   return [value, name];
                 }}
-
-                contentStyle={{
-                  backgroundColor: 'white',
-                  borderRadius: '12px',
-                  border: '1px solid #e5e7eb',
-                  boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                }}
+                contentStyle={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                 itemStyle={{ fontWeight: 'bold' }}
-                labelStyle={{ color: '#1f2937', fontWeight: 'black', marginBottom: '4px' }}
               />
               <Bar dataKey="valor" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* LISTA DINÂMICA (1/3) - MUDA CONFORME O CLIQUE */}
         <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-100 transition-all duration-300 ${categoriaSelecionada ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`}>
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-lg flex items-center gap-2 text-orange-600 truncate pr-2">
               <Award size={22} />
               <span className="truncate" title={tituloProdutos}>{tituloProdutos}</span>
             </h3>
-
-            {/* Botão de Fechar Filtro */}
             {categoriaSelecionada && (
-              <button
-                onClick={() => setCategoriaSelecionada(null)}
-                className="p-1 bg-gray-100 rounded-full hover:bg-red-100 hover:text-red-600 transition-colors"
-                title="Limpar filtro"
-              >
+              <button onClick={() => setCategoriaSelecionada(null)} className="p-1 bg-gray-100 rounded-full hover:bg-red-100 hover:text-red-600 transition-colors" title="Limpar filtro">
                 <div className="text-xs font-bold px-2">Limpar</div>
               </button>
             )}
           </div>
-
           <div className="space-y-3 max-h-[380px] overflow-y-auto pr-2 custom-scrollbar">
             {listaProdutosExibida.length > 0 ? (
               listaProdutosExibida.map((p, i) => (
@@ -707,31 +738,23 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
                 </div>
               ))
             ) : (
-              <p className="text-center text-gray-400 text-sm py-4">Nenhum produto encontrado nesta categoria.</p>
+              <p className="text-center text-gray-400 text-sm py-4">Nenhum produto encontrado.</p>
             )}
           </div>
         </div>
       </div>
 
-      {/* --- SEGUNDA LINHA: CATEGORIAS E PAGAMENTO --- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-
-        {/* GRÁFICO CATEGORIAS COM CLICK */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-lg flex items-center gap-2 text-blue-600"><Tag size={22} /> Vendas por Categoria</h3>
-            {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique na barra para detalhar</span>}
+            {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique para detalhar</span>}
           </div>
-
           <div className="space-y-4">
             {graficos.categorias.slice(0, 8).map((cat, i) => {
               const isSelected = categoriaSelecionada === cat.nome;
               return (
-                <div
-                  key={i}
-                  className={`flex flex-col gap-2 cursor-pointer group transition-all duration-200 ${isSelected ? 'opacity-100' : categoriaSelecionada ? 'opacity-40 hover:opacity-70' : ''}`}
-                  onClick={() => setCategoriaSelecionada(isSelected ? null : cat.nome)}
-                >
+                <div key={i} className={`flex flex-col gap-2 cursor-pointer group transition-all duration-200 ${isSelected ? 'opacity-100' : categoriaSelecionada ? 'opacity-40 hover:opacity-70' : ''}`} onClick={() => setCategoriaSelecionada(isSelected ? null : cat.nome)}>
                   <div className="flex justify-between items-center text-sm">
                     <span className={`font-bold transition-colors ${isSelected ? 'text-blue-700' : 'text-gray-700 group-hover:text-blue-600'}`}>{cat.nome}</span>
                     <div className="text-right">
@@ -740,10 +763,7 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
                     </div>
                   </div>
                   <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${isSelected ? 'bg-orange-500' : 'bg-blue-500 group-hover:bg-blue-400'}`}
-                      style={{ width: `${cat.percentual}%` }}
-                    />
+                    <div className={`h-full rounded-full transition-all duration-500 ${isSelected ? 'bg-orange-500' : 'bg-blue-500 group-hover:bg-blue-400'}`} style={{ width: `${cat.percentual}%` }} />
                   </div>
                 </div>
               );
@@ -751,7 +771,6 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
           </div>
         </div>
 
-        {/* Pagamentos (Mantenha igual) */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-violet-600"><DollarSign size={22} /> Formas de Pagamento</h3>
           <ResponsiveContainer width="100%" height={300}>
@@ -765,7 +784,6 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
         </div>
       </div>
 
-      {/* Pedidos Recentes (Mantenha igual) */}
       <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
         <h3 className="font-bold text-lg mb-6 text-gray-900">Pedidos Recentes</h3>
         <div className="overflow-x-auto">
@@ -796,7 +814,6 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
     </>
   );
 }
-
 // === COMPONENTE: KPI Card ===
 function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
   const styles = {
