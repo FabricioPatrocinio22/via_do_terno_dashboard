@@ -363,6 +363,81 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
+# --- NOVO ENDPOINT: RELATÓRIOS AVANÇADOS (Geográfico, Tamanho, Churn) ---
+@app.get("/api/dashboard/avancado")
+def get_relatorios_avancados():
+    cache = carregar_cache()
+    
+    # Estruturas de dados
+    vendas_por_estado = defaultdict(float)
+    produtos_tamanho_cor = defaultdict(int)
+    clientes_ultima_compra = {}
+    
+    hoje = datetime.now()
+
+    # Processamento
+    for pedido_id, detalhe in cache.items():
+        # 1. Geográfico
+        estado = detalhe.get('estadoSigla', 'N/A')
+        if estado and len(estado) == 2: # Filtra estados válidos
+            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+
+        # 2. Tamanho/Cor (Drill Down nos itens)
+        itens = detalhe.get('arrayPedidoRastreio', [])
+        for rastreio in itens:
+            for item in rastreio.get('pedidoItem', []):
+                nome_base = item.get('produtoNome', 'Item')
+                variacao = item.get('produtoDerivacaoNome', '') 
+                # Cria chave "Nome [Tamanho]"
+                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
+                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+
+        # 3. Churn (Inativos)
+        email = detalhe.get('pessoaEmail')
+        nome = detalhe.get('pessoaNome')
+        data_str = detalhe.get('dataHora')
+        
+        if email and data_str:
+            # Pega só os 10 primeiros chars (AAAA-MM-DD) para evitar erro de hora
+            try:
+                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
+                if email not in clientes_ultima_compra or data_compra > clientes_ultima_compra[email]['data']:
+                    clientes_ultima_compra[email] = {
+                        "nome": nome,
+                        "email": email,
+                        "data_obj": data_compra,
+                        "data_formatada": data_compra.strftime("%d/%m/%Y"),
+                        "dias_inativo": (hoje - data_compra).days
+                    }
+            except:
+                pass
+
+    # Formatação para o Frontend (Listas Ordenadas)
+    
+    # Top Estados
+    lista_estados = sorted(
+        [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
+        key=lambda x: x["valor"], reverse=True
+    )[:10]
+
+    # Top Variações (Tamanho/Cor)
+    lista_tamanhos = sorted(
+        [{"name": k, "qtd": v} for k, v in produtos_tamanho_cor.items()],
+        key=lambda x: x["qtd"], reverse=True
+    )[:10]
+
+    # Clientes em Risco (>90 dias)
+    lista_churn = sorted(
+        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > 90],
+        key=lambda x: x['dias_inativo'], reverse=True
+    )[:20] # Top 20 mais críticos
+
+    return {
+        "geografico": lista_estados,
+        "produtos_variacao": lista_tamanhos,
+        "churn": lista_churn
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
-import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut } from 'lucide-react';
+import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut, MapPin, Shirt, UserX } from 'lucide-react';
 
 function App() {
   // --- ESTADO DE AUTENTICAÇÃO ---
@@ -11,7 +11,9 @@ function App() {
   // --- ESTADOS DO DASHBOARD ---
   const [data, setData] = useState(null);
   const [dataMesAtual, setDataMesAtual] = useState(null);
+  const [dataAvancado, setDataAvancado] = useState(null); // NOVO ESTADO
   const [loading, setLoading] = useState(true);
+  
   const [ano, setAno] = useState(2026);
   const [periodoKpi, setPeriodoKpi] = useState(30);
   const [periodoGraficos, setPeriodoGraficos] = useState(30);
@@ -26,7 +28,6 @@ function App() {
   const [graficosDataInicio, setGraficosDataInicio] = useState('');
   const [graficosDataFim, setGraficosDataFim] = useState('');
 
-  // 1. VERIFICAR SE JÁ ESTÁ LOGADO AO ABRIR
   useEffect(() => {
     const token = localStorage.getItem('via_token');
     if (token === 'logado_com_sucesso') {
@@ -35,25 +36,26 @@ function App() {
     setAuthLoading(false);
   }, []);
 
-  // 2. BUSCAR DADOS (SÓ SE ESTIVER LOGADO)
   const fetchData = async () => {
     if (!isAuthenticated) return;
 
     setLoading(true);
     try {
-      // AJUSTE AQUI SEU IP SE MUDAR
       const BASE_API = "https://api-viadoterno.onrender.com";
 
       if (abaAtiva === 'analitico') {
         const res = await axios.get(`${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`);
         setData(res.data);
-      } else {
+      } else if (abaAtiva === 'mes-atual') {
         const res = await axios.get(`${BASE_API}/api/dashboard/mes-atual?meta_mensal=${metaMensal}`);
         setDataMesAtual(res.data);
+      } else if (abaAtiva === 'avancado') {
+        // NOVA CHAMADA PARA O ENDPOINT AVANÇADO
+        const res = await axios.get(`${BASE_API}/api/dashboard/avancado`);
+        setDataAvancado(res.data);
       }
     } catch (err) {
       console.error("Erro ao carregar dados:", err);
-      // Se der erro 401, desloga
       if (err.response && err.response.status === 401) handleLogout();
     } finally {
       setLoading(false);
@@ -66,31 +68,26 @@ function App() {
     }
   }, [ano, periodoKpi, periodoGraficos, abaAtiva, metaMensal, isAuthenticated]);
 
-  // FUNÇÃO DE LOGOUT
   const handleLogout = () => {
     localStorage.removeItem('via_token');
     setIsAuthenticated(false);
     setData(null);
     setDataMesAtual(null);
+    setDataAvancado(null);
   };
 
-  // --- SE ESTIVER CARREGANDO A AUTH, MOSTRA NADA ---
   if (authLoading) return null;
 
-  // --- SE NÃO ESTIVER LOGADO, MOSTRA TELA DE LOGIN ---
   if (!isAuthenticated) {
     return <LoginPage onLoginSuccess={() => setIsAuthenticated(true)} />;
   }
 
-  // --- DAQUI PARA BAIXO É O DASHBOARD (IGUAL ANTES) ---
   const formatMoney = (val) => {
     if (typeof val === 'string') return val;
-    // ADICIONEI: maximumFractionDigits: 2
     return `R$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
-  // (Funções auxiliares omitidas para brevidade, mas elas continuam existindo aqui... 
-  // formatarPeriodo, obterLabelPeriodo, etc. Copie as funções do código anterior ou use as que já tem)
-  const formatarPeriodo = (dias, dataInicio, dataFim) => { /* ...código anterior... */ if (!dataInicio) return `${dias} dias`; return "Período"; };
+  
+  const formatarPeriodo = (dias, dataInicio, dataFim) => { if (!dataInicio) return `${dias} dias`; return "Período"; };
   const obterLabelPeriodo = (dias, dataInicio, dataFim) => { if (dataInicio) return "Customizado"; return `${dias} dias`; };
   const aplicarPeriodoKpiCustomizado = () => { /* ... */ };
   const aplicarPeriodoGraficosCustomizado = () => { /* ... */ };
@@ -99,20 +96,16 @@ function App() {
 
   return (
     <div className="relative min-h-screen bg-gray-50 text-gray-800 p-4 md:p-8">
-      {/* LOADING OVERLAY CUSTOMIZADO VIA DO TERNO */}
       {loading && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/95 backdrop-blur-sm transition-all">
           <img
             src="https://viadoterno.cdn.magazord.com.br/img/2026/02/logo/3331/logo-via-do-terno.png?_gl=1*2r1ugl*_ga*MTA1MzYyMDcwOC4xNzYwNzA5OTQ0*_ga_4JXK3QVJ6X*czE3NzAyMDQ3NTckbzI5NiRnMSR0MTc3MDIxMDQzMyRqMjYkbDAkaDA."
             alt="Carregando..."
-            className="h-24 md:h-32 object-contain animate-logo-breathe mb-6" // H-24 no celular, H-32 no PC, e a nossa animação
+            className="h-24 md:h-32 object-contain animate-logo-breathe mb-6"
           />
-
-          {/* Barra de progresso fake para dar um charme extra (opcional) */}
           <div className="w-48 h-1 bg-gray-100 rounded-full overflow-hidden mb-2">
             <div className="h-full bg-slate-800 animate-[pulse_1.5s_ease-in-out_infinite] w-2/3 rounded-full"></div>
           </div>
-
           <p className="text-gray-500 font-light tracking-[0.2em] uppercase text-xs animate-pulse">
             Sincronizando dados...
           </p>
@@ -120,41 +113,42 @@ function App() {
       )}
 
       <div className={`transition-all duration-500 ${loading ? 'opacity-20 scale-[0.98] pointer-events-none' : 'opacity-100 scale-100'}`}>
-
-        {/* HEADER */}
         <header className="mb-10 flex flex-col md:flex-row justify-between items-center gap-6 border-b border-gray-100 pb-8">
           <div className="flex flex-col md:flex-row items-center gap-6">
             <img src="https://viadoterno.cdn.magazord.com.br/resources/LOGO%20HORIZONTAL%20VIA.png" alt="Via do Terno" className="h-16 md:h-20 object-contain" />
             <div className="hidden md:block w-px h-12 bg-gray-300"></div>
             <h1 className="text-gray-600 font-light text-xl md:text-2xl tracking-[0.2em] uppercase text-center md:text-left">Painel de Inteligência</h1>
           </div>
-
           <div className="flex items-center gap-3">
             <button onClick={fetchData} className="group flex items-center gap-3 px-5 py-3 bg-white rounded-full shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-100 transition-all">
               <span className="text-xs font-bold text-gray-400 group-hover:text-blue-600 uppercase tracking-wider">Sincronizar</span>
               <RefreshCw size={18} className="text-gray-400 group-hover:text-blue-600 group-hover:rotate-180 transition-all duration-700" />
             </button>
-
-            {/* BOTÃO DE SAIR */}
             <button onClick={handleLogout} className="p-3 bg-red-50 rounded-full text-red-400 hover:bg-red-100 hover:text-red-600 transition-colors" title="Sair">
               <LogOut size={20} />
             </button>
           </div>
         </header>
 
-        {/* NAVEGAÇÃO E CONTEÚDO (Idêntico ao anterior, apenas renderizando os componentes filhos) */}
-        <div className="mb-8 flex gap-4 border-b border-gray-200">
-          <button onClick={() => setAbaAtiva('analitico')} className={`pb-4 px-6 font-bold text-sm transition-all relative ${abaAtiva === 'analitico' ? 'text-blue-600' : 'text-gray-400'}`}>
+        {/* NAVEGAÇÃO DE ABAS ATUALIZADA */}
+        <div className="mb-8 flex gap-4 border-b border-gray-200 overflow-x-auto">
+          <button onClick={() => setAbaAtiva('analitico')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'analitico' ? 'text-blue-600' : 'text-gray-400'}`}>
             Análise por Período
             {abaAtiva === 'analitico' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"></div>}
           </button>
-          <button onClick={() => setAbaAtiva('mes-atual')} className={`pb-4 px-6 font-bold text-sm transition-all relative ${abaAtiva === 'mes-atual' ? 'text-emerald-600' : 'text-gray-400'}`}>
+          <button onClick={() => setAbaAtiva('mes-atual')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'mes-atual' ? 'text-emerald-600' : 'text-gray-400'}`}>
             Mês Atual
             {abaAtiva === 'mes-atual' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600"></div>}
           </button>
+          {/* NOVA ABA */}
+          <button onClick={() => setAbaAtiva('avancado')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'avancado' ? 'text-purple-600' : 'text-gray-400'}`}>
+            Estratégico & Churn
+            {abaAtiva === 'avancado' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>}
+          </button>
         </div>
 
-        {abaAtiva === 'analitico' ? (
+        {/* RENDERIZAÇÃO CONDICIONAL DAS ABAS */}
+        {abaAtiva === 'analitico' && (
           <DashboardAnalitico
             data={data} ano={ano} setAno={setAno}
             periodoKpi={periodoKpi} setPeriodoKpi={setPeriodoKpi}
@@ -169,13 +163,128 @@ function App() {
             aplicarPeriodoKpiCustomizado={aplicarPeriodoKpiCustomizado} aplicarPeriodoGraficosCustomizado={aplicarPeriodoGraficosCustomizado}
             CORES_CATEGORIA={CORES_CATEGORIA} formatarNomeCategoria={formatarNomeCategoria}
           />
-        ) : (
+        )}
+        
+        {abaAtiva === 'mes-atual' && (
           <DashboardMesAtual
             data={dataMesAtual} formatMoney={formatMoney} metaMensal={metaMensal} setMetaMensal={setMetaMensal}
           />
         )}
+
+        {/* NOVA TELA RENDERIZADA */}
+        {abaAtiva === 'avancado' && (
+          <DashboardAvancado data={dataAvancado} formatMoney={formatMoney} />
+        )}
       </div>
     </div>
+  );
+}
+
+// === NOVO COMPONENTE: DASHBOARD AVANÇADO ===
+function DashboardAvancado({ data, formatMoney }) {
+  if (!data) return <div className="text-center text-gray-500 py-10">Carregando inteligência avançada...</div>;
+  
+  const { geografico, produtos_variacao, churn } = data;
+
+  return (
+    <>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        
+        {/* GRÁFICO GEOGRÁFICO */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-blue-600">
+            <MapPin size={22} /> Vendas por Estado
+          </h3>
+          <ResponsiveContainer width="100%" height={350}>
+            <BarChart data={geografico} layout="vertical" margin={{ left: 0 }}>
+              <XAxis type="number" hide />
+              <YAxis dataKey="name" type="category" width={40} tick={{ fontWeight: 'bold' }} />
+              <Tooltip formatter={(v) => formatMoney(v)} />
+              <Bar dataKey="valor" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20}>
+                 <Cell fill="#2563eb" />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* GRÁFICO PRODUTOS DETALHADOS (TAMANHO/COR) */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-purple-600">
+            <Shirt size={22} /> Top Variações (Tamanho/Cor)
+          </h3>
+          <div className="space-y-4 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
+            {produtos_variacao.map((p, i) => (
+              <div key={i} className="flex flex-col gap-1 border-b border-gray-50 pb-2 last:border-0">
+                <div className="flex justify-between items-start gap-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-bold text-gray-700">{p.name}</p>
+                  </div>
+                  <span className="text-purple-600 font-black">{p.qtd} un.</span>
+                </div>
+                <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden mt-1">
+                  <div 
+                    className="h-full bg-purple-500 rounded-full" 
+                    style={{ width: `${(p.qtd / (produtos_variacao[0]?.qtd || 1)) * 100}%` }} 
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* TABELA DE CHURN (CLIENTES EM RISCO) */}
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-red-100">
+        <h3 className="font-bold text-lg mb-2 flex items-center gap-2 text-red-600">
+          <UserX size={22} /> Clientes em Risco (Inativos +90 dias)
+        </h3>
+        <p className="text-sm text-gray-500 mb-6">Estes clientes compraram anteriormente mas não retornaram há mais de 3 meses. Ótima oportunidade para ação de e-mail marketing.</p>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b-2 border-red-100 bg-red-50/50">
+                <th className="text-left py-3 px-4 text-xs font-bold text-red-400 uppercase">Cliente</th>
+                <th className="text-left py-3 px-4 text-xs font-bold text-red-400 uppercase">Última Compra</th>
+                <th className="text-left py-3 px-4 text-xs font-bold text-red-400 uppercase">Dias Inativo</th>
+                <th className="text-right py-3 px-4 text-xs font-bold text-red-400 uppercase">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {churn.map((cliente, i) => (
+                <tr key={i} className="border-b border-gray-50 hover:bg-red-50 transition-colors">
+                  <td className="py-3 px-4">
+                    <p className="font-bold text-sm text-gray-800">{cliente.nome}</p>
+                    <p className="text-xs text-gray-400">{cliente.email}</p>
+                  </td>
+                  <td className="py-3 px-4 text-sm text-gray-600">{cliente.data_formatada}</td>
+                  <td className="py-3 px-4">
+                    <span className="px-3 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-full">
+                      {cliente.dias_inativo} dias
+                    </span>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <a 
+                      href={`mailto:${cliente.email}?subject=Saudades de você, ${cliente.nome.split(' ')[0]}!&body=Olá ${cliente.nome}, sentimos sua falta na Via do Terno!`}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-800 underline"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Enviar E-mail
+                    </a>
+                  </td>
+                </tr>
+              ))}
+              {churn.length === 0 && (
+                <tr>
+                  <td colSpan="4" className="text-center py-8 text-gray-400">Nenhum cliente em risco encontrado (ou cache vazio).</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
   );
 }
 
