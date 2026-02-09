@@ -363,81 +363,114 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# --- NOVO ENDPOINT: RELATÓRIOS AVANÇADOS (Geográfico, Tamanho, Churn) ---
+# --- NOVO ENDPOINT: RELATÓRIOS AVANÇADOS (Com Auto-Correção de Cliente) ---
 @app.get("/api/dashboard/avancado")
-def get_relatorios_avancados():
+def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
     cache = carregar_cache()
+    headers = get_headers() 
     
-    # Estruturas de dados
     vendas_por_estado = defaultdict(float)
     produtos_tamanho_cor = defaultdict(int)
     clientes_ultima_compra = {}
     
-    hoje = datetime.now()
+    # Timezone corrigido
+    hoje = get_now_br()
+    data_limite_graficos = hoje - timedelta(days=dias_analise)
+    dias_churn_corte = meses_churn * 30
 
-    # Processamento
-    for pedido_id, detalhe in cache.items():
-        # 1. Geográfico
-        estado = detalhe.get('estadoSigla', 'N/A')
-        if estado and len(estado) == 2: # Filtra estados válidos
-            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+    # --- AUTO-REPAIR: O Segredo do Churn ---
+    # Busca detalhes (quem é o cliente) para pedidos que só têm o resumo
+    pedidos_atualizados = 0
+    LIMITE_ATUALIZACAO_BATCH = 20 # Faz 20 por vez para não travar
 
-        # 2. Tamanho/Cor (Drill Down nos itens)
-        itens = detalhe.get('arrayPedidoRastreio', [])
-        for rastreio in itens:
-            for item in rastreio.get('pedidoItem', []):
-                nome_base = item.get('produtoNome', 'Item')
-                variacao = item.get('produtoDerivacaoNome', '') 
-                # Cria chave "Nome [Tamanho]"
-                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
-                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+    # Ordena para priorizar os mais recentes na busca de dados
+    lista_pedidos = sorted(cache.items(), key=lambda x: x[1].get('dataHora', ''), reverse=True)
 
-        # 3. Churn (Inativos)
-        email = detalhe.get('pessoaEmail')
-        nome = detalhe.get('pessoaNome')
-        data_str = detalhe.get('dataHora')
-        
-        if email and data_str:
-            # Pega só os 10 primeiros chars (AAAA-MM-DD) para evitar erro de hora
+    for pedido_id, detalhe in lista_pedidos:
+        # Se o pedido NÃO tem email (é anônimo), precisamos buscar os dados do cliente
+        if 'pessoaEmail' not in detalhe and pedidos_atualizados < LIMITE_ATUALIZACAO_BATCH:
             try:
-                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
-                if email not in clientes_ultima_compra or data_compra > clientes_ultima_compra[email]['data']:
-                    clientes_ultima_compra[email] = {
-                        "nome": nome,
-                        "email": email,
-                        "data_obj": data_compra,
-                        "data_formatada": data_compra.strftime("%d/%m/%Y"),
-                        "dias_inativo": (hoje - data_compra).days
-                    }
+                # Busca na API da Magazord quem é o dono desse pedido
+                res = requests.get(f"{BASE_URL}/v2/site/pedido/{pedido_id}", headers=headers)
+                if res.status_code == 200:
+                    dados_completos = res.json().get('data', {})
+                    # Salva os dados completos (agora com Nome e Email) no cache
+                    cache[pedido_id] = dados_completos
+                    detalhe = dados_completos 
+                    pedidos_atualizados += 1
             except:
                 pass
 
-    # Formatação para o Frontend (Listas Ordenadas)
-    
-    # Top Estados
+        # --- PROCESSAMENTO DOS DADOS ---
+        data_str = detalhe.get('dataHora')
+        if not data_str: continue
+        
+        try:
+            # Pega data ignorando horário para evitar erros
+            data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
+            # Ajuste de timezone para comparação
+            data_compra = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
+        except:
+            continue
+
+        # 1. Gráficos (Estado/Tamanho) - Filtra por dias selecionados
+        if data_compra.date() >= data_limite_graficos.date():
+            estado = detalhe.get('estadoSigla', 'N/A')
+            if estado and len(estado) == 2:
+                vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+
+            itens = detalhe.get('arrayPedidoRastreio', [])
+            for rastreio in itens:
+                for item in rastreio.get('pedidoItem', []):
+                    nome_base = item.get('produtoNome', 'Item')
+                    variacao = item.get('produtoDerivacaoNome', '') 
+                    chave = f"{nome_base} [{variacao}]" if variacao else nome_base
+                    produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+
+        # 2. Churn - Só funciona se tivermos identificado o cliente (Email/Nome)
+        email = detalhe.get('pessoaEmail')
+        nome = detalhe.get('pessoaNome')
+        
+        if email:
+            dias_inativo = (hoje - data_compra).days
+
+            # Mantém apenas a compra mais recente deste cliente
+            if email not in clientes_ultima_compra or data_compra > clientes_ultima_compra[email]['data_obj']:
+                clientes_ultima_compra[email] = {
+                    "nome": nome,
+                    "email": email,
+                    "data_obj": data_compra,
+                    "data_formatada": data_compra.strftime("%d/%m/%Y"),
+                    "dias_inativo": dias_inativo
+                }
+
+    # Se descobrimos clientes novos, salvamos no arquivo para ficar rápido na próxima
+    if pedidos_atualizados > 0:
+        salvar_cache(cache)
+
+    # Ordenação e Retorno
     lista_estados = sorted(
         [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
         key=lambda x: x["valor"], reverse=True
     )[:10]
 
-    # Top Variações (Tamanho/Cor)
     lista_tamanhos = sorted(
         [{"name": k, "qtd": v} for k, v in produtos_tamanho_cor.items()],
         key=lambda x: x["qtd"], reverse=True
     )[:10]
 
-    # Clientes em Risco (>90 dias)
+    # Lista final de Churn
     lista_churn = sorted(
-        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > 90],
+        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_churn_corte],
         key=lambda x: x['dias_inativo'], reverse=True
-    )[:20] # Top 20 mais críticos
+    )[:50]
 
     return {
         "geografico": lista_estados,
         "produtos_variacao": lista_tamanhos,
         "churn": lista_churn
     }
-
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
