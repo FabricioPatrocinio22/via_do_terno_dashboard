@@ -363,7 +363,8 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# --- NOVO ENDPOINT: RELATÓRIOS AVANÇADOS (Com Auto-Correção de Cliente) ---
+# Substitua a função get_relatorios_avancados no seu main.py por esta:
+
 @app.get("/api/dashboard/avancado")
 def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
     cache = carregar_cache()
@@ -373,48 +374,74 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
     produtos_tamanho_cor = defaultdict(int)
     clientes_ultima_compra = {}
     
-    # Timezone corrigido
     hoje = get_now_br()
     data_limite_graficos = hoje - timedelta(days=dias_analise)
     dias_churn_corte = meses_churn * 30
 
-    # --- AUTO-REPAIR: O Segredo do Churn ---
-    # Busca detalhes (quem é o cliente) para pedidos que só têm o resumo
-    pedidos_atualizados = 0
-    LIMITE_ATUALIZACAO_BATCH = 20 # Faz 20 por vez para não travar
+    # --- CORREÇÃO HÍBRIDA (O PULO DO GATO 🐱) ---
+    # Estratégia: Não podemos pegar só os recentes (senão o Churn não aparece)
+    # nem só os antigos (senão os gráficos recentes ficam sem estado).
+    # Vamos pegar um pouco de cada.
+    
+    pedidos_sem_email = []
+    
+    # 1. Filtra APENAS quem precisa de reparo
+    for pid, dados in cache.items():
+        if 'pessoaEmail' not in dados:
+            pedidos_sem_email.append((pid, dados.get('dataHora', '')))
+    
+    # 2. Ordena do mais novo para o mais velho
+    pedidos_sem_email.sort(key=lambda x: x[1], reverse=True)
+    
+    pedidos_para_reparar = []
+    qtd_candidatos = len(pedidos_sem_email)
+    
+    # 3. SELEÇÃO INTELIGENTE (10 Novos + 10 Velhos)
+    if qtd_candidatos > 0:
+        # Pega os 10 mais recentes (Top da lista)
+        pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[:10]])
+        
+        # Pega os 10 mais antigos (Fundo da lista) - Essencial para o Churn!
+        if qtd_candidatos > 10:
+            pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[-10:]])
+            
+    # Remove duplicatas (caso a lista seja pequena)
+    pedidos_para_reparar = list(set(pedidos_para_reparar))
+    
+    # 4. Busca os detalhes na API (Lote Seguro)
+    atualizados_count = 0
+    for pid in pedidos_para_reparar:
+        try:
+            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                dados_completos = res.json().get('data', {})
+                cache[pid] = dados_completos
+                atualizados_count += 1
+        except:
+            pass # Segue o jogo se der erro num pedido específico
 
-    # Ordena para priorizar os mais recentes na busca de dados
-    lista_pedidos = sorted(cache.items(), key=lambda x: x[1].get('dataHora', ''), reverse=True)
+    if atualizados_count > 0:
+        salvar_cache(cache)
 
-    for pedido_id, detalhe in lista_pedidos:
-        # Se o pedido NÃO tem email (é anônimo), precisamos buscar os dados do cliente
-        if 'pessoaEmail' not in detalhe and pedidos_atualizados < LIMITE_ATUALIZACAO_BATCH:
-            try:
-                # Busca na API da Magazord quem é o dono desse pedido
-                res = requests.get(f"{BASE_URL}/v2/site/pedido/{pedido_id}", headers=headers)
-                if res.status_code == 200:
-                    dados_completos = res.json().get('data', {})
-                    # Salva os dados completos (agora com Nome e Email) no cache
-                    cache[pedido_id] = dados_completos
-                    detalhe = dados_completos 
-                    pedidos_atualizados += 1
-            except:
-                pass
+    # --- GERAÇÃO DOS RELATÓRIOS ---
+    # Agora processa tudo (incluindo o que acabamos de consertar)
+    
+    lista_processamento = sorted(cache.items(), key=lambda x: x[1].get('dataHora', ''), reverse=True)
 
-        # --- PROCESSAMENTO DOS DADOS ---
+    for pedido_id, detalhe in lista_processamento:
         data_str = detalhe.get('dataHora')
         if not data_str: continue
         
         try:
-            # Pega data ignorando horário para evitar erros
+            # Parse seguro
             data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
-            # Ajuste de timezone para comparação
-            data_compra = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
+            # Ajuste simples de timezone para comparação
+            data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
         except:
             continue
 
-        # 1. Gráficos (Estado/Tamanho) - Filtra por dias selecionados
-        if data_compra.date() >= data_limite_graficos.date():
+        # 1. Gráficos (Filtro Recente)
+        if data_compra_aware.date() >= data_limite_graficos.date():
             estado = detalhe.get('estadoSigla', 'N/A')
             if estado and len(estado) == 2:
                 vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
@@ -427,28 +454,23 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
                     chave = f"{nome_base} [{variacao}]" if variacao else nome_base
                     produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
 
-        # 2. Churn - Só funciona se tivermos identificado o cliente (Email/Nome)
+        # 2. Churn (Histórico Completo)
         email = detalhe.get('pessoaEmail')
         nome = detalhe.get('pessoaNome')
         
         if email:
-            dias_inativo = (hoje - data_compra).days
+            dias_inativo = (hoje - data_compra_aware).days
 
-            # Mantém apenas a compra mais recente deste cliente
-            if email not in clientes_ultima_compra or data_compra > clientes_ultima_compra[email]['data_obj']:
+            if email not in clientes_ultima_compra or data_compra_aware > clientes_ultima_compra[email]['data_obj']:
                 clientes_ultima_compra[email] = {
                     "nome": nome,
                     "email": email,
-                    "data_obj": data_compra,
-                    "data_formatada": data_compra.strftime("%d/%m/%Y"),
+                    "data_obj": data_compra_aware,
+                    "data_formatada": data_compra_aware.strftime("%d/%m/%Y"),
                     "dias_inativo": dias_inativo
                 }
 
-    # Se descobrimos clientes novos, salvamos no arquivo para ficar rápido na próxima
-    if pedidos_atualizados > 0:
-        salvar_cache(cache)
-
-    # Ordenação e Retorno
+    # Formatação Final
     lista_estados = sorted(
         [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
         key=lambda x: x["valor"], reverse=True
@@ -459,7 +481,6 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
         key=lambda x: x["qtd"], reverse=True
     )[:10]
 
-    # Lista final de Churn
     lista_churn = sorted(
         [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_churn_corte],
         key=lambda x: x['dias_inativo'], reverse=True
@@ -468,9 +489,10 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
     return {
         "geografico": lista_estados,
         "produtos_variacao": lista_tamanhos,
-        "churn": lista_churn
+        "churn": lista_churn,
+        "debug_info": f"Reparados: {atualizados_count}"
     }
-    
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
