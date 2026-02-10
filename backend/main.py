@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone # <--- CHANGED
 from pydantic import BaseModel
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
@@ -41,6 +42,94 @@ def carregar_usuarios():
 class LoginData(BaseModel):
     username: str
     password: str
+
+# --- FUNÇÃO AUXILIAR: BUSCAR DETALHES EM PARALELO (REAL-TIME) ---
+def buscar_detalhes_tempo_real(lista_pedidos_resumidos):
+    """
+    Recebe uma lista de pedidos (Resumo) e busca os detalhes completos na API.
+    Usa 10 conexões simultâneas para ser rápido.
+    """
+    pedidos_completos = []
+    headers = get_headers()
+
+    def fetch_one(pedido_resumo):
+        pid = pedido_resumo.get('id') or pedido_resumo.get('codigo')
+        try:
+            # Chama a API de detalhe
+            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
+            if res.status_code == 200:
+                return res.json().get('data', {})
+        except:
+            pass
+        return None
+
+    # Processamento Paralelo (10 workers = 10x mais rápido que um loop normal)
+    print(f"🔄 Baixando detalhes de {len(lista_pedidos_resumidos)} pedidos em tempo real...")
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(fetch_one, lista_pedidos_resumidos)
+        
+        for p in results:
+            if p: pedidos_completos.append(p)
+            
+    return pedidos_completos
+
+# --- FUNÇÃO AUXILIAR: BUSCAR LISTA POR PERÍODO ---
+def buscar_lista_periodo(dias_atras):
+    """
+    Pagina a API da Magazord voltando no tempo até atingir a data limite.
+    """
+    headers = get_headers()
+    lista_final = []
+    pagina = 1
+    continuar = True
+    
+    # Define a data de corte (Ex: Hoje - 30 dias)
+    data_corte = get_now_br() - timedelta(days=dias_atras)
+    
+    print(f"📅 Buscando pedidos dos últimos {dias_atras} dias (desde {data_corte.strftime('%d/%m/%Y')})...")
+
+    while continuar:
+        try:
+            # Busca página
+            res = requests.get(
+                f"{BASE_URL}/v2/site/pedido", 
+                headers=headers,
+                params={
+                    "limit": 50, # 50 por página
+                    "page": pagina, 
+                    "order": "dataHora", 
+                    "orderDirection": "desc"
+                },
+                timeout=15
+            )
+            
+            items = res.json().get('data', {}).get('items', [])
+            if not items: break
+
+            for p in items:
+                data_str = p.get('dataHora', '')
+                try:
+                    dt_pedido = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
+                    
+                    # Se o pedido for MAIS NOVO que a data de corte, a gente pega
+                    if dt_pedido >= data_corte:
+                        lista_final.append(p)
+                    else:
+                        # Se encontramos um pedido mais velho que a data de corte, 
+                        # podemos parar de buscar (pois a lista vem ordenada)
+                        continuar = False
+                        break
+                except:
+                    continue
+            
+            pagina += 1
+            if pagina > 100: break # Trava de segurança anti-loop infinito
+
+        except Exception as e:
+            print(f"Erro na paginação: {e}")
+            break
+            
+    return lista_final
 
 @app.post("/api/login")
 def login(data: LoginData):
@@ -363,45 +452,35 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# --- ROTA 1: GRÁFICOS RÁPIDOS (Estado e Produtos) ---
+# --- ROTA 1: GRÁFICOS (ESTADO/PRODUTOS) ---
 @app.get("/api/dashboard/graficos-avancados")
 def get_graficos_avancados(dias: int = 30):
-    cache = carregar_cache()
+    # 1. Busca a lista de pedidos do período (Paginação Inteligente)
+    lista_resumo = buscar_lista_periodo(dias)
     
+    # 2. Busca os detalhes completos de CADA pedido (Força Bruta Otimizada)
+    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
+    
+    # 3. Monta os Gráficos
     vendas_por_estado = defaultdict(float)
     produtos_tamanho_cor = defaultdict(int)
-    
-    hoje = get_now_br()
-    data_limite = hoje - timedelta(days=dias)
 
-    # Processamento Rápido (Só memória)
-    for pedido_id, detalhe in cache.items():
-        data_str = detalhe.get('dataHora')
-        if not data_str: continue
-        
-        try:
-            data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
-            data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
-        except:
-            continue
+    for detalhe in pedidos_detalhados:
+        # Geográfico
+        estado = detalhe.get('estadoSigla', 'N/A')
+        if estado and len(estado) == 2:
+            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
 
-        # Filtro de Data
-        if data_compra_aware.date() >= data_limite.date():
-            # Geográfico
-            estado = detalhe.get('estadoSigla', 'N/A')
-            if estado and len(estado) == 2:
-                vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+        # Produtos (Drill Down)
+        itens = detalhe.get('arrayPedidoRastreio', [])
+        for rastreio in itens:
+            for item in rastreio.get('pedidoItem', []):
+                nome_base = item.get('produtoNome', 'Item')
+                variacao = item.get('produtoDerivacaoNome', '') 
+                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
+                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
 
-            # Produtos
-            itens = detalhe.get('arrayPedidoRastreio', [])
-            for rastreio in itens:
-                for item in rastreio.get('pedidoItem', []):
-                    nome_base = item.get('produtoNome', 'Item')
-                    variacao = item.get('produtoDerivacaoNome', '') 
-                    chave = f"{nome_base} [{variacao}]" if variacao else nome_base
-                    produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
-
-    # Formatação
+    # 4. Formatação Final
     lista_estados = sorted(
         [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
         key=lambda x: x["valor"], reverse=True
@@ -414,81 +493,59 @@ def get_graficos_avancados(dias: int = 30):
 
     return {
         "geografico": lista_estados,
-        "produtos_variacao": lista_tamanhos
+        "produtos_variacao": lista_tamanhos,
+        "total_analisado": len(pedidos_detalhados)
     }
 
-# --- ROTA 2: CHURN INTELIGENTE (Com Auto-Repair) ---
+# --- ROTA 2: CHURN (CLIENTES INATIVOS) ---
 @app.get("/api/dashboard/churn")
 def get_churn_clientes(meses: int = 3):
-    cache = carregar_cache()
-    headers = get_headers()
+    # Para calcular Churn, precisamos olhar um histórico LONGO.
+    # Vamos fixar em buscar os últimos 6 meses de pedidos para ter base de comparação.
+    # Se o cliente comprou há 4 meses e não voltou, ele aparece.
+    MESES_HISTORICO = 6 
+    dias_busca = MESES_HISTORICO * 30
     
+    # 1. Busca histórico (Força Bruta)
+    lista_resumo = buscar_lista_periodo(dias_busca)
+    
+    # 2. Busca detalhes (Precisamos do E-mail!)
+    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
+    
+    # 3. Lógica de Churn
     clientes_ultima_compra = {}
     hoje = get_now_br()
-    dias_churn_corte = meses * 30
+    dias_churn_corte = meses * 30 # O filtro que o usuário escolheu (Ex: 3 meses)
 
-    # --- AUTO-REPAIR HÍBRIDO (Mantemos aqui pois é quem precisa do email) ---
-    pedidos_sem_email = []
-    for pid, dados in cache.items():
-        if 'pessoaEmail' not in dados:
-            pedidos_sem_email.append((pid, dados.get('dataHora', '')))
-    
-    pedidos_sem_email.sort(key=lambda x: x[1], reverse=True)
-    
-    pedidos_para_reparar = []
-    qtd = len(pedidos_sem_email)
-    
-    # Repara 10 Recentes + 10 Antigos
-    if qtd > 0:
-        pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[:10]])
-        if qtd > 10:
-            pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[-10:]])
-    
-    pedidos_para_reparar = list(set(pedidos_para_reparar))
-    
-    atualizados = 0
-    for pid in pedidos_para_reparar:
-        try:
-            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=5)
-            if res.status_code == 200:
-                cache[pid] = res.json().get('data', {})
-                atualizados += 1
-        except: pass
-
-    if atualizados > 0:
-        salvar_cache(cache)
-
-    # --- CÁLCULO DO CHURN ---
-    for pedido_id, detalhe in cache.items():
+    for detalhe in pedidos_detalhados:
         email = detalhe.get('pessoaEmail')
         nome = detalhe.get('pessoaNome')
         data_str = detalhe.get('dataHora')
         
         if email and data_str:
             try:
-                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
-                data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
-                
-                dias_inativo = (hoje - data_compra_aware).days
+                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
+                dias_inativo = (hoje - data_compra).days
 
-                if email not in clientes_ultima_compra or data_compra_aware > clientes_ultima_compra[email]['data_obj']:
+                # Guarda sempre a MENOR inatividade (a compra mais recente)
+                if email not in clientes_ultima_compra or dias_inativo < clientes_ultima_compra[email]['dias_inativo']:
                     clientes_ultima_compra[email] = {
                         "nome": nome,
                         "email": email,
-                        "data_obj": data_compra_aware,
-                        "data_formatada": data_compra_aware.strftime("%d/%m/%Y"),
+                        "data_formatada": data_compra.strftime("%d/%m/%Y"),
                         "dias_inativo": dias_inativo
                     }
             except: continue
 
+    # 4. Filtra quem superou o tempo de corte
     lista_churn = sorted(
         [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_churn_corte],
-        key=lambda x: x['dias_inativo'], reverse=True
+        key=lambda x: x['dias_inativo'], reverse=True # Mais tempo inativo primeiro
     )[:50]
 
     return {
         "churn": lista_churn,
-        "reparados": atualizados
+        "analise_base": f"Baseado nos últimos {len(pedidos_detalhados)} pedidos ({MESES_HISTORICO} meses)"
     }
 
 if __name__ == "__main__":
