@@ -363,89 +363,36 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# Substitua a função get_relatorios_avancados no seu main.py por esta:
-
-@app.get("/api/dashboard/avancado")
-def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
+# --- ROTA 1: GRÁFICOS RÁPIDOS (Estado e Produtos) ---
+@app.get("/api/dashboard/graficos-avancados")
+def get_graficos_avancados(dias: int = 30):
     cache = carregar_cache()
-    headers = get_headers() 
     
     vendas_por_estado = defaultdict(float)
     produtos_tamanho_cor = defaultdict(int)
-    clientes_ultima_compra = {}
     
     hoje = get_now_br()
-    data_limite_graficos = hoje - timedelta(days=dias_analise)
-    dias_churn_corte = meses_churn * 30
+    data_limite = hoje - timedelta(days=dias)
 
-    # --- CORREÇÃO HÍBRIDA (O PULO DO GATO 🐱) ---
-    # Estratégia: Não podemos pegar só os recentes (senão o Churn não aparece)
-    # nem só os antigos (senão os gráficos recentes ficam sem estado).
-    # Vamos pegar um pouco de cada.
-    
-    pedidos_sem_email = []
-    
-    # 1. Filtra APENAS quem precisa de reparo
-    for pid, dados in cache.items():
-        if 'pessoaEmail' not in dados:
-            pedidos_sem_email.append((pid, dados.get('dataHora', '')))
-    
-    # 2. Ordena do mais novo para o mais velho
-    pedidos_sem_email.sort(key=lambda x: x[1], reverse=True)
-    
-    pedidos_para_reparar = []
-    qtd_candidatos = len(pedidos_sem_email)
-    
-    # 3. SELEÇÃO INTELIGENTE (10 Novos + 10 Velhos)
-    if qtd_candidatos > 0:
-        # Pega os 10 mais recentes (Top da lista)
-        pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[:10]])
-        
-        # Pega os 10 mais antigos (Fundo da lista) - Essencial para o Churn!
-        if qtd_candidatos > 10:
-            pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[-10:]])
-            
-    # Remove duplicatas (caso a lista seja pequena)
-    pedidos_para_reparar = list(set(pedidos_para_reparar))
-    
-    # 4. Busca os detalhes na API (Lote Seguro)
-    atualizados_count = 0
-    for pid in pedidos_para_reparar:
-        try:
-            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=5)
-            if res.status_code == 200:
-                dados_completos = res.json().get('data', {})
-                cache[pid] = dados_completos
-                atualizados_count += 1
-        except:
-            pass # Segue o jogo se der erro num pedido específico
-
-    if atualizados_count > 0:
-        salvar_cache(cache)
-
-    # --- GERAÇÃO DOS RELATÓRIOS ---
-    # Agora processa tudo (incluindo o que acabamos de consertar)
-    
-    lista_processamento = sorted(cache.items(), key=lambda x: x[1].get('dataHora', ''), reverse=True)
-
-    for pedido_id, detalhe in lista_processamento:
+    # Processamento Rápido (Só memória)
+    for pedido_id, detalhe in cache.items():
         data_str = detalhe.get('dataHora')
         if not data_str: continue
         
         try:
-            # Parse seguro
             data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
-            # Ajuste simples de timezone para comparação
             data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
         except:
             continue
 
-        # 1. Gráficos (Filtro Recente)
-        if data_compra_aware.date() >= data_limite_graficos.date():
+        # Filtro de Data
+        if data_compra_aware.date() >= data_limite.date():
+            # Geográfico
             estado = detalhe.get('estadoSigla', 'N/A')
             if estado and len(estado) == 2:
                 vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
 
+            # Produtos
             itens = detalhe.get('arrayPedidoRastreio', [])
             for rastreio in itens:
                 for item in rastreio.get('pedidoItem', []):
@@ -454,23 +401,7 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
                     chave = f"{nome_base} [{variacao}]" if variacao else nome_base
                     produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
 
-        # 2. Churn (Histórico Completo)
-        email = detalhe.get('pessoaEmail')
-        nome = detalhe.get('pessoaNome')
-        
-        if email:
-            dias_inativo = (hoje - data_compra_aware).days
-
-            if email not in clientes_ultima_compra or data_compra_aware > clientes_ultima_compra[email]['data_obj']:
-                clientes_ultima_compra[email] = {
-                    "nome": nome,
-                    "email": email,
-                    "data_obj": data_compra_aware,
-                    "data_formatada": data_compra_aware.strftime("%d/%m/%Y"),
-                    "dias_inativo": dias_inativo
-                }
-
-    # Formatação Final
+    # Formatação
     lista_estados = sorted(
         [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
         key=lambda x: x["valor"], reverse=True
@@ -481,16 +412,83 @@ def get_relatorios_avancados(dias_analise: int = 30, meses_churn: int = 3):
         key=lambda x: x["qtd"], reverse=True
     )[:10]
 
+    return {
+        "geografico": lista_estados,
+        "produtos_variacao": lista_tamanhos
+    }
+
+# --- ROTA 2: CHURN INTELIGENTE (Com Auto-Repair) ---
+@app.get("/api/dashboard/churn")
+def get_churn_clientes(meses: int = 3):
+    cache = carregar_cache()
+    headers = get_headers()
+    
+    clientes_ultima_compra = {}
+    hoje = get_now_br()
+    dias_churn_corte = meses * 30
+
+    # --- AUTO-REPAIR HÍBRIDO (Mantemos aqui pois é quem precisa do email) ---
+    pedidos_sem_email = []
+    for pid, dados in cache.items():
+        if 'pessoaEmail' not in dados:
+            pedidos_sem_email.append((pid, dados.get('dataHora', '')))
+    
+    pedidos_sem_email.sort(key=lambda x: x[1], reverse=True)
+    
+    pedidos_para_reparar = []
+    qtd = len(pedidos_sem_email)
+    
+    # Repara 10 Recentes + 10 Antigos
+    if qtd > 0:
+        pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[:10]])
+        if qtd > 10:
+            pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[-10:]])
+    
+    pedidos_para_reparar = list(set(pedidos_para_reparar))
+    
+    atualizados = 0
+    for pid in pedidos_para_reparar:
+        try:
+            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                cache[pid] = res.json().get('data', {})
+                atualizados += 1
+        except: pass
+
+    if atualizados > 0:
+        salvar_cache(cache)
+
+    # --- CÁLCULO DO CHURN ---
+    for pedido_id, detalhe in cache.items():
+        email = detalhe.get('pessoaEmail')
+        nome = detalhe.get('pessoaNome')
+        data_str = detalhe.get('dataHora')
+        
+        if email and data_str:
+            try:
+                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
+                data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
+                
+                dias_inativo = (hoje - data_compra_aware).days
+
+                if email not in clientes_ultima_compra or data_compra_aware > clientes_ultima_compra[email]['data_obj']:
+                    clientes_ultima_compra[email] = {
+                        "nome": nome,
+                        "email": email,
+                        "data_obj": data_compra_aware,
+                        "data_formatada": data_compra_aware.strftime("%d/%m/%Y"),
+                        "dias_inativo": dias_inativo
+                    }
+            except: continue
+
     lista_churn = sorted(
         [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_churn_corte],
         key=lambda x: x['dias_inativo'], reverse=True
     )[:50]
 
     return {
-        "geografico": lista_estados,
-        "produtos_variacao": lista_tamanhos,
         "churn": lista_churn,
-        "debug_info": f"Reparados: {atualizados_count}"
+        "reparados": atualizados
     }
 
 if __name__ == "__main__":
