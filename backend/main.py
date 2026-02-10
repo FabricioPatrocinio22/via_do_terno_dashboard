@@ -452,35 +452,45 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# --- ROTA 1: GRÁFICOS (ESTADO/PRODUTOS) ---
+# --- ROTA 1: GRÁFICOS RÁPIDOS (Estado e Produtos) ---
 @app.get("/api/dashboard/graficos-avancados")
 def get_graficos_avancados(dias: int = 30):
-    # 1. Busca a lista de pedidos do período (Paginação Inteligente)
-    lista_resumo = buscar_lista_periodo(dias)
+    cache = carregar_cache()
     
-    # 2. Busca os detalhes completos de CADA pedido (Força Bruta Otimizada)
-    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
-    
-    # 3. Monta os Gráficos
     vendas_por_estado = defaultdict(float)
     produtos_tamanho_cor = defaultdict(int)
+    
+    hoje = get_now_br()
+    data_limite = hoje - timedelta(days=dias)
 
-    for detalhe in pedidos_detalhados:
-        # Geográfico
-        estado = detalhe.get('estadoSigla', 'N/A')
-        if estado and len(estado) == 2:
-            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+    # Processamento Rápido (Só memória)
+    for pedido_id, detalhe in cache.items():
+        data_str = detalhe.get('dataHora')
+        if not data_str: continue
+        
+        try:
+            data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
+            data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
+        except:
+            continue
 
-        # Produtos (Drill Down)
-        itens = detalhe.get('arrayPedidoRastreio', [])
-        for rastreio in itens:
-            for item in rastreio.get('pedidoItem', []):
-                nome_base = item.get('produtoNome', 'Item')
-                variacao = item.get('produtoDerivacaoNome', '') 
-                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
-                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+        # Filtro de Data
+        if data_compra_aware.date() >= data_limite.date():
+            # Geográfico
+            estado = detalhe.get('estadoSigla', 'N/A')
+            if estado and len(estado) == 2:
+                vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
 
-    # 4. Formatação Final
+            # Produtos
+            itens = detalhe.get('arrayPedidoRastreio', [])
+            for rastreio in itens:
+                for item in rastreio.get('pedidoItem', []):
+                    nome_base = item.get('produtoNome', 'Item')
+                    variacao = item.get('produtoDerivacaoNome', '') 
+                    chave = f"{nome_base} [{variacao}]" if variacao else nome_base
+                    produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+
+    # Formatação
     lista_estados = sorted(
         [{"name": k, "valor": v} for k, v in vendas_por_estado.items()],
         key=lambda x: x["valor"], reverse=True
@@ -493,59 +503,81 @@ def get_graficos_avancados(dias: int = 30):
 
     return {
         "geografico": lista_estados,
-        "produtos_variacao": lista_tamanhos,
-        "total_analisado": len(pedidos_detalhados)
+        "produtos_variacao": lista_tamanhos
     }
 
-# --- ROTA 2: CHURN (CLIENTES INATIVOS) ---
+# --- ROTA 2: CHURN INTELIGENTE (Com Auto-Repair) ---
 @app.get("/api/dashboard/churn")
 def get_churn_clientes(meses: int = 3):
-    # Para calcular Churn, precisamos olhar um histórico LONGO.
-    # Vamos fixar em buscar os últimos 6 meses de pedidos para ter base de comparação.
-    # Se o cliente comprou há 4 meses e não voltou, ele aparece.
-    MESES_HISTORICO = 6 
-    dias_busca = MESES_HISTORICO * 30
+    cache = carregar_cache()
+    headers = get_headers()
     
-    # 1. Busca histórico (Força Bruta)
-    lista_resumo = buscar_lista_periodo(dias_busca)
-    
-    # 2. Busca detalhes (Precisamos do E-mail!)
-    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
-    
-    # 3. Lógica de Churn
     clientes_ultima_compra = {}
     hoje = get_now_br()
-    dias_churn_corte = meses * 30 # O filtro que o usuário escolheu (Ex: 3 meses)
+    dias_churn_corte = meses * 30
 
-    for detalhe in pedidos_detalhados:
+    # --- AUTO-REPAIR HÍBRIDO (Mantemos aqui pois é quem precisa do email) ---
+    pedidos_sem_email = []
+    for pid, dados in cache.items():
+        if 'pessoaEmail' not in dados:
+            pedidos_sem_email.append((pid, dados.get('dataHora', '')))
+    
+    pedidos_sem_email.sort(key=lambda x: x[1], reverse=True)
+    
+    pedidos_para_reparar = []
+    qtd = len(pedidos_sem_email)
+    
+    # Repara 10 Recentes + 10 Antigos
+    if qtd > 0:
+        pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[:10]])
+        if qtd > 10:
+            pedidos_para_reparar.extend([x[0] for x in pedidos_sem_email[-10:]])
+    
+    pedidos_para_reparar = list(set(pedidos_para_reparar))
+    
+    atualizados = 0
+    for pid in pedidos_para_reparar:
+        try:
+            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                cache[pid] = res.json().get('data', {})
+                atualizados += 1
+        except: pass
+
+    if atualizados > 0:
+        salvar_cache(cache)
+
+    # --- CÁLCULO DO CHURN ---
+    for pedido_id, detalhe in cache.items():
         email = detalhe.get('pessoaEmail')
         nome = detalhe.get('pessoaNome')
         data_str = detalhe.get('dataHora')
         
         if email and data_str:
             try:
-                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
-                dias_inativo = (hoje - data_compra).days
+                data_compra = datetime.strptime(data_str[:10], "%Y-%m-%d")
+                data_compra_aware = data_compra.replace(tzinfo=timezone.utc) - timedelta(hours=3)
+                
+                dias_inativo = (hoje - data_compra_aware).days
 
-                # Guarda sempre a MENOR inatividade (a compra mais recente)
-                if email not in clientes_ultima_compra or dias_inativo < clientes_ultima_compra[email]['dias_inativo']:
+                if email not in clientes_ultima_compra or data_compra_aware > clientes_ultima_compra[email]['data_obj']:
                     clientes_ultima_compra[email] = {
                         "nome": nome,
                         "email": email,
-                        "data_formatada": data_compra.strftime("%d/%m/%Y"),
+                        "data_obj": data_compra_aware,
+                        "data_formatada": data_compra_aware.strftime("%d/%m/%Y"),
                         "dias_inativo": dias_inativo
                     }
             except: continue
 
-    # 4. Filtra quem superou o tempo de corte
     lista_churn = sorted(
         [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_churn_corte],
-        key=lambda x: x['dias_inativo'], reverse=True # Mais tempo inativo primeiro
+        key=lambda x: x['dias_inativo'], reverse=True
     )[:50]
 
     return {
         "churn": lista_churn,
-        "analise_base": f"Baseado nos últimos {len(pedidos_detalhados)} pedidos ({MESES_HISTORICO} meses)"
+        "reparados": atualizados
     }
 
 if __name__ == "__main__":

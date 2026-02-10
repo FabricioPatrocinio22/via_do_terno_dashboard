@@ -54,7 +54,8 @@ function App() {
     if (abaAtiva !== 'avancado') setLoading(true);
 
     try {
-      const BASE_API = "https://api-viadoterno.onrender.com";
+      //const BASE_API = "https://api-viadoterno.onrender.com";
+      const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
         const res = await axios.get(`${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`);
@@ -128,7 +129,9 @@ function App() {
 
   // Função para forçar atualização APENAS do Churn (Botão Sincronizar)
   const syncChurnOnly = () => {
-    const BASE_API = "https://api-viadoterno.onrender.com";
+    //const BASE_API = "https://api-viadoterno.onrender.com";
+    const BASE_API = "http://localhost:8000";
+    
     setLoadingChurn(true);
     axios.get(`${BASE_API}/api/dashboard/churn?meses=${avancadoMesesChurn}`)
       .then(res => {
@@ -386,7 +389,8 @@ function LoginPage({ onLoginSuccess }) {
 
     try {
       // AJUSTE SEU IP AQUI TBM
-      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      await axios.post('http://localhost:8000/api/login', { username, password });
 
       // Se deu certo:
       localStorage.setItem('via_token', 'logado_com_sucesso');
