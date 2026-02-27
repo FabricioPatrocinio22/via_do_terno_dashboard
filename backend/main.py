@@ -2,11 +2,11 @@ import os
 import json
 import base64
 import requests
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone # <--- CHANGED
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,8 +23,27 @@ USERS_FILE = "users.json"
 
 # --- HELPER: TIMEZONE BRASIL (UTC-3) ---
 def get_now_br():
-    # Garante que pegamos a hora do Brasil independente de onde o servidor está (Render/AWS/etc)
     return datetime.now(timezone.utc) - timedelta(hours=3)
+
+def get_headers():
+    credenciais = f"{USUARIO}:{SENHA}"
+    token_b64 = base64.b64encode(credenciais.encode()).decode()
+    return {"Authorization": f"Basic {token_b64}", "Content-Type": "application/json"}
+
+# --- GESTÃO DE CACHE (A SOLUÇÃO DO TRAVAMENTO) ---
+def carregar_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except: return {}
+    return {}
+
+def salvar_cache(cache):
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f: 
+            json.dump(cache, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Erro ao salvar cache: {e}")
 
 # --- GESTÃO DE USUÁRIOS ---
 def carregar_usuarios():
@@ -34,139 +53,246 @@ def carregar_usuarios():
             json.dump(padrao, f, indent=4)
         return padrao
     try:
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
+        with open(USERS_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+    except: return {}
 
 class LoginData(BaseModel):
     username: str
     password: str
 
-# --- FUNÇÃO AUXILIAR: BUSCAR DETALHES EM PARALELO (REAL-TIME) ---
-def buscar_detalhes_tempo_real(lista_pedidos_resumidos):
-    """
-    Recebe uma lista de pedidos (Resumo) e busca os detalhes completos na API.
-    Usa 10 conexões simultâneas para ser rápido.
-    """
-    pedidos_completos = []
-    headers = get_headers()
-
-    def fetch_one(pedido_resumo):
-        pid = pedido_resumo.get('id') or pedido_resumo.get('codigo')
-        try:
-            # Chama a API de detalhe
-            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
-            if res.status_code == 200:
-                return res.json().get('data', {})
-        except:
-            pass
-        return None
-
-    # Processamento Paralelo (10 workers = 10x mais rápido que um loop normal)
-    print(f"🔄 Baixando detalhes de {len(lista_pedidos_resumidos)} pedidos em tempo real...")
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(fetch_one, lista_pedidos_resumidos)
-        
-        for p in results:
-            if p: pedidos_completos.append(p)
-            
-    return pedidos_completos
-
-# --- FUNÇÃO AUXILIAR: BUSCAR LISTA POR PERÍODO ---
-def buscar_lista_periodo(dias_atras):
-    """
-    Pagina a API da Magazord voltando no tempo até atingir a data limite.
-    """
-    headers = get_headers()
-    lista_final = []
-    pagina = 1
-    continuar = True
-    
-    # Define a data de corte (Ex: Hoje - 30 dias)
-    data_corte = get_now_br() - timedelta(days=dias_atras)
-    
-    print(f"📅 Buscando pedidos dos últimos {dias_atras} dias (desde {data_corte.strftime('%d/%m/%Y')})...")
-
-    while continuar:
-        try:
-            # Busca página
-            res = requests.get(
-                f"{BASE_URL}/v2/site/pedido", 
-                headers=headers,
-                params={
-                    "limit": 50, # 50 por página
-                    "page": pagina, 
-                    "order": "dataHora", 
-                    "orderDirection": "desc"
-                },
-                timeout=15
-            )
-            
-            items = res.json().get('data', {}).get('items', [])
-            if not items: break
-
-            for p in items:
-                data_str = p.get('dataHora', '')
-                try:
-                    dt_pedido = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
-                    
-                    # Se o pedido for MAIS NOVO que a data de corte, a gente pega
-                    if dt_pedido >= data_corte:
-                        lista_final.append(p)
-                    else:
-                        # Se encontramos um pedido mais velho que a data de corte, 
-                        # podemos parar de buscar (pois a lista vem ordenada)
-                        continuar = False
-                        break
-                except:
-                    continue
-            
-            pagina += 1
-            if pagina > 100: break # Trava de segurança anti-loop infinito
-
-        except Exception as e:
-            print(f"Erro na paginação: {e}")
-            break
-            
-    return lista_final
-
 @app.post("/api/login")
 def login(data: LoginData):
     usuarios = carregar_usuarios()
-    senha_real = usuarios.get(data.username)
-    if senha_real and senha_real == data.password:
+    if usuarios.get(data.username) == data.password:
         return {"status": "success", "token": "logado_com_sucesso"}
     raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
 
-def get_headers():
-    credenciais = f"{USUARIO}:{SENHA}"
-    token_b64 = base64.b64encode(credenciais.encode()).decode()
-    return {"Authorization": f"Basic {token_b64}", "Content-Type": "application/json"}
+# --- FUNÇÕES INTELIGENTES (SMART FETCH) ---
 
-def carregar_cache():
-    if os.path.exists(CACHE_FILE):
+def buscar_detalhes_paralelo_smart(lista_resumo, cache_existente):
+    """
+    Só busca na API os pedidos que NÃO estão no cache.
+    Isso economiza milhares de requisições e evita travamentos.
+    """
+    pedidos_para_baixar = []
+    
+    # 1. Filtra: Quem eu já tenho?
+    for p in lista_resumo:
+        pid = str(p.get('id') or p.get('codigo'))
+        if pid not in cache_existente:
+            pedidos_para_baixar.append(p)
+            
+    if not pedidos_para_baixar:
+        print("⚡ Todos os pedidos já estão no cache! Processamento instantâneo.")
+        return []
+
+    print(f"📥 Baixando {len(pedidos_para_baixar)} novos pedidos (os outros {len(lista_resumo) - len(pedidos_para_baixar)} já temos)...")
+    
+    novos_detalhes = []
+    headers = get_headers()
+
+    def fetch_one(pedido_resumo):
+        pid = str(pedido_resumo.get('id') or pedido_resumo.get('codigo'))
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f: return json.load(f)
-        except: return {}
-    return {}
+            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
+            if res.status_code == 200:
+                return pid, res.json().get('data', {})
+        except: pass
+        return pid, None
 
-def salvar_cache(cache):
-    with open(CACHE_FILE, 'w', encoding='utf-8') as f: json.dump(cache, f, ensure_ascii=False, indent=4)
+    # Usa 15 conexões para baixar o que falta
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        results = executor.map(fetch_one, pedidos_para_baixar)
+        
+        for pid, dados in results:
+            if dados:
+                novos_detalhes.append((pid, dados))
+            
+    return novos_detalhes
 
-@app.get("/api/dashboard/mes-atual")
-def get_mes_atual_data(meta_mensal: float = 50000):
+def buscar_lista_periodo(dias_atras):
+    headers = get_headers()
+    lista_final = []
+    pagina = 1
+    
+    # Filtro Otimizado na API
+    data_corte = get_now_br() - timedelta(days=dias_atras)
+    data_inicio_api = data_corte.strftime("%Y-%m-%d")
+    
+    print(f"📅 Buscando lista de pedidos desde: {data_inicio_api}")
+
+    while True:
+        try:
+            params = {
+                "limit": 100, # Aumentei para 100 para ser mais rápido
+                "page": pagina, 
+                "order": "dataHora", "orderDirection": "desc",
+                "dataInicio": data_inicio_api
+            }
+            res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, params=params, timeout=15)
+            items = res.json().get('data', {}).get('items', [])
+            if not items: break
+
+            lista_final.extend(items)
+            pagina += 1
+            if pagina > 200: break 
+        except: break
+            
+    print(f"✅ Lista encontrada: {len(lista_final)} pedidos.")
+    return lista_final
+
+# ==========================================
+# ROTA 1: GRÁFICOS AVANÇADOS (COM SALVAMENTO AUTOMÁTICO)
+# ==========================================
+@app.get("/api/dashboard/graficos-avancados")
+def get_graficos_avancados(dias: int = 30):
     cache = carregar_cache()
+    
+    # 1. Busca lista atualizada da API
+    lista_resumo = buscar_lista_periodo(dias)
+    
+    # --- LÓGICA DE DOWNLOAD INTELIGENTE COM SALVAMENTO ---
+    pedidos_para_baixar = []
+    ids_no_periodo = []
+
+    # Separa o que já temos do que falta
+    for p in lista_resumo:
+        pid = str(p.get('id') or p.get('codigo'))
+        ids_no_periodo.append(pid)
+        if pid not in cache:
+            pedidos_para_baixar.append(p)
+    
+    # Se tiver coisa nova, baixa em lotes
+    if pedidos_para_baixar:
+        print(f"📥 Baixando {len(pedidos_para_baixar)} novos pedidos...")
+        headers = get_headers()
+        
+        def fetch_one(pedido_resumo):
+            pid = str(pedido_resumo.get('id') or pedido_resumo.get('codigo'))
+            try:
+                res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
+                if res.status_code == 200:
+                    return pid, res.json().get('data', {})
+            except: pass
+            return pid, None
+
+        # Processa e SALVA A CADA 50 PEDIDOS
+        contador = 0
+        with ThreadPoolExecutor(max_workers=10) as executor: # Reduzi para 10 para ser mais estável
+            results = executor.map(fetch_one, pedidos_para_baixar)
+            
+            for pid, dados in results:
+                if dados:
+                    cache[pid] = dados
+                    contador += 1
+                
+                # O PULO DO GATO: Salva a cada 50 pedidos baixados
+                if contador % 50 == 0:
+                    print(f"💾 Salvando progresso parcial... ({contador}/{len(pedidos_para_baixar)})")
+                    salvar_cache(cache)
+        
+        # Salva o finalzinho que sobrou
+        salvar_cache(cache)
+        print("✅ Download concluído e salvo!")
+    else:
+        print("⚡ Todos os pedidos já estão no cache!")
+
+    # --- GERAÇÃO DOS GRÁFICOS (IGUAL ANTES) ---
+    vendas_por_estado = defaultdict(float)
+    produtos_tamanho_cor = defaultdict(int)
+
+    for pid in ids_no_periodo:
+        detalhe = cache.get(pid)
+        if not detalhe: continue
+
+        situacao = detalhe.get('pedidoSituacaoDescricao', '').lower()
+        if 'cancelado' in situacao: continue
+
+        estado = detalhe.get('estadoSigla', 'N/A')
+        if estado and len(estado) == 2:
+            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
+
+        itens = detalhe.get('arrayPedidoRastreio', [])
+        for rastreio in itens:
+            for item in rastreio.get('pedidoItem', []):
+                nome_base = item.get('produtoNome', 'Item')
+                variacao = item.get('produtoDerivacaoNome', '') 
+                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
+                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
+
+    return {
+        "geografico": sorted([{"name": k, "valor": v} for k, v in vendas_por_estado.items()], key=lambda x: x["valor"], reverse=True)[:10],
+        "produtos_variacao": sorted([{"name": k, "qtd": v} for k, v in produtos_tamanho_cor.items()], key=lambda x: x["qtd"], reverse=True)[:10]
+    }
+
+# ==========================================
+# ROTA 2: CHURN (COM SMART CACHE + FILTRO)
+# ==========================================
+@app.get("/api/dashboard/churn")
+def get_churn_clientes(meses: int = 3):
+    cache = carregar_cache()
+    
+    # Busca 6 meses de histórico
+    lista_resumo = buscar_lista_periodo(180) 
+    
+    # Baixa o que falta
+    novos = buscar_detalhes_paralelo_smart(lista_resumo, cache)
+    
+    if novos:
+        for pid, dados in novos:
+            cache[str(pid)] = dados
+        salvar_cache(cache)
+    
+    clientes_ultima_compra = {}
+    hoje = get_now_br()
+    dias_corte = meses * 30
+    
+    ids_no_periodo = [str(p.get('id') or p.get('codigo')) for p in lista_resumo]
+
+    for pid in ids_no_periodo:
+        detalhe = cache.get(pid)
+        if not detalhe: continue
+        
+        # Filtro de Status
+        if 'cancelado' in detalhe.get('pedidoSituacaoDescricao', '').lower(): continue
+
+        email = detalhe.get('pessoaEmail')
+        nome = detalhe.get('pessoaNome')
+        data_str = detalhe.get('dataHora')
+        
+        if email and data_str:
+            try:
+                dt_pedido = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
+                dias_inativo = (hoje - dt_pedido).days
+
+                if email not in clientes_ultima_compra or dias_inativo < clientes_ultima_compra[email]['dias_inativo']:
+                    clientes_ultima_compra[email] = {
+                        "nome": nome,
+                        "email": email,
+                        "data_formatada": dt_pedido.strftime("%d/%m/%Y"),
+                        "dias_inativo": dias_inativo
+                    }
+            except: continue
+
+    lista_churn = sorted(
+        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_corte],
+        key=lambda x: x['dias_inativo'], reverse=True
+    )[:50]
+
+    return {"churn": lista_churn}
+
+# ==========================================
+# ROTA 3: MÊS ATUAL (MANTIDA DO SEU CÓDIGO)
+# ==========================================
+@app.get("/api/dashboard/mes-atual")
+def get_mes_atual_data(meta_mensal: float = 60000):
+    cache = carregar_cache() # <--- Otimização: Agora lê do cache se tiver
     headers = get_headers()
     
-    # --- CORREÇÃO DE DATA (TIMEZONE) ---
-    hoje = get_now_br() # Usa a função com timezone corrigido
+    hoje = get_now_br()
     
-    # Lógica para pegar último dia do mês corretamente
-    if hoje.month == 12:
-        proximo_mes = hoje.replace(year=hoje.year + 1, month=1, day=1)
-    else:
-        proximo_mes = hoje.replace(month=hoje.month + 1, day=1)
+    if hoje.month == 12: proximo_mes = hoje.replace(year=hoje.year + 1, month=1, day=1)
+    else: proximo_mes = hoje.replace(month=hoje.month + 1, day=1)
         
     ultimo_dia_mes_date = proximo_mes - timedelta(days=1)
     ultimo_dia_mes = ultimo_dia_mes_date.day
@@ -183,10 +309,12 @@ def get_mes_atual_data(meta_mensal: float = 50000):
     vendas_por_forma_pagamento = defaultdict(float)
     pedidos_detalhados = []
 
+    # Busca apenas pedidos deste mês
+    data_inicio_mes = hoje.replace(day=1).strftime("%Y-%m-%d")
+
     while continuar:
-        # Request da API Magazord
         res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, 
-                           params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc"})
+                           params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc", "dataInicio": data_inicio_mes})
         
         if res.status_code != 200: break
         items = res.json().get('data', {}).get('items', [])
@@ -194,33 +322,32 @@ def get_mes_atual_data(meta_mensal: float = 50000):
         
         for p_resumo in items:
             try:
-                # Parse da data do pedido
                 dt_pedido = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
                 
-                # Se mudou o mês/ano, paramos (considerando timezone Brasil na comparação)
+                # Proteção extra de data
                 if dt_pedido.month != hoje.month or dt_pedido.year != hoje.year:
-                    # Se a data do pedido for menor que o dia 1 do mês atual, paramos
-                    if dt_pedido < hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None):
-                        continuar = False
                     continue
                 
-                valor = float(p_resumo.get('valorTotal', 0))
+                # --- NOVO: CÁLCULO DESCONTANDO O FRETE ---
+                valor_total = float(p_resumo.get('valorTotal') or 0)
+                valor_frete = float(p_resumo.get('valorFrete') or 0)
+                
+                # A variável 'valor' agora representa apenas os PRODUTOS (líquido)
+                valor = valor_total - valor_frete
+                
                 situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
                 
-                # Ignorar cancelados
                 if 'cancelado' in situacao: continue
                 
-                # Atualiza totais
                 total_faturamento += valor
                 total_pedidos += 1
-
-                # Atualiza dia a dia
                 vendas_por_dia[dt_pedido.day]["valor"] += valor
                 vendas_por_dia[dt_pedido.day]["qtd"] += 1
                 
-                # Detalhes do produto (com Cache)
-                codigo_p = p_resumo.get('codigo')
+                # --- OTIMIZAÇÃO: Tenta pegar do cache antes de baixar ---
+                codigo_p = str(p_resumo.get('codigo'))
                 if codigo_p not in cache:
+                    # Se não tem, baixa e salva
                     det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
                     cache[codigo_p] = det.get('data', {})
                 
@@ -229,16 +356,13 @@ def get_mes_atual_data(meta_mensal: float = 50000):
                 if pedido_det:
                     forma_pag = pedido_det.get('pedidoFormaPagamentoDescricao', 'Outros')
                     vendas_por_forma_pagamento[forma_pag] += valor
-                    
                     cliente_nome = pedido_det.get('clienteNome', 'Consumidor')
 
                     for r in pedido_det.get('arrayPedidoRastreio', []):
                         for item in r.get('pedidoItem', []):
-                            cat = item.get('categoria') or 'Outros' # Proteção contra Null
+                            cat = item.get('categoria') or 'Outros'
                             valor_item = float(item.get('valorItem', 0))
-                            
                             vendas_por_categoria[cat] += valor_item
-                            
                             produtos_vendidos.append({
                                 "nome": item.get('produtoNome'),
                                 "qtd": float(item.get('quantidade', 1)),
@@ -249,29 +373,25 @@ def get_mes_atual_data(meta_mensal: float = 50000):
                     pedidos_detalhados.append({
                         "codigo": codigo_p,
                         "data": dt_pedido.strftime("%d/%m/%Y"),
-                        "valor": valor,
+                        "valor": valor, # <-- Aqui será exibido o valor descontado o frete
                         "situacao": p_resumo.get('pedidoSituacaoDescricao'),
                         "cliente": cliente_nome
                     })
-            except Exception as e:
-                print(f"Erro ao processar pedido {p_resumo.get('codigo')}: {e}")
-                continue
+            except: continue
 
         pagina += 1
-        # AUMENTO DO LIMITE: 50 -> 100 páginas (10.000 pedidos/mês) para garantir
-        if pagina > 100: break
+        if pagina > 50: break
 
+    # Salva o que baixou nessa rota também
     salvar_cache(cache)
     
-    # --- PROCESSAMENTO DOS DADOS (Mantido Igual) ---
+    # Processamento Final (Agrupamentos)
     produtos_agrupados_geral = defaultdict(lambda: {"qtd": 0, "valor": 0.0})
     produtos_agrupados_cat = defaultdict(lambda: defaultdict(lambda: {"qtd": 0, "valor": 0.0}))
 
     for p in produtos_vendidos:
-        # Geral
         produtos_agrupados_geral[p["nome"]]["qtd"] += p["qtd"]
         produtos_agrupados_geral[p["nome"]]["valor"] += p["valor"]
-        # Por Categoria
         produtos_agrupados_cat[p["categoria"]][p["nome"]]["qtd"] += p["qtd"]
         produtos_agrupados_cat[p["categoria"]][p["nome"]]["valor"] += p["valor"]
 
@@ -282,11 +402,10 @@ def get_mes_atual_data(meta_mensal: float = 50000):
 
     produtos_drilldown = {}
     for cat, prods in produtos_agrupados_cat.items():
-        lista_ordenada = sorted(
+        produtos_drilldown[cat] = sorted(
             [{"nome": nome, "qtd": dados["qtd"], "valor": dados["valor"]} for nome, dados in prods.items()],
             key=lambda x: x["valor"], reverse=True
         )
-        produtos_drilldown[cat] = lista_ordenada
 
     vendas_dia_lista = [{"dia": d, "valor": vendas_por_dia[d]["valor"], "qtd": vendas_por_dia[d]["qtd"]} for d in range(1, ultimo_dia_mes + 1)]
     
@@ -295,13 +414,8 @@ def get_mes_atual_data(meta_mensal: float = 50000):
         key=lambda x: x['valor'], reverse=True
     )
 
-    formas_pagamento_lista = sorted([{"nome": k, "valor": v} for k, v in vendas_por_forma_pagamento.items()], key=lambda x: x['valor'], reverse=True)
-
-    # Métricas finais
     dias_decorridos = hoje.day
     dias_restantes = ultimo_dia_mes - dias_decorridos
-    percentual_meta = (total_faturamento / meta_mensal * 100) if meta_mensal > 0 else 0
-    ticket_medio = total_faturamento / total_pedidos if total_pedidos > 0 else 0
     media_dia = total_faturamento / dias_decorridos if dias_decorridos > 0 else 0
     projecao_mes = media_dia * ultimo_dia_mes
 
@@ -309,9 +423,9 @@ def get_mes_atual_data(meta_mensal: float = 50000):
         "resumo": {
             "total_faturamento": total_faturamento,
             "total_pedidos": total_pedidos,
-            "ticket_medio": ticket_medio,
+            "ticket_medio": total_faturamento / total_pedidos if total_pedidos > 0 else 0,
             "meta_mensal": meta_mensal,
-            "percentual_meta": percentual_meta,
+            "percentual_meta": (total_faturamento / meta_mensal * 100) if meta_mensal > 0 else 0,
             "falta_atingir": max(0, meta_mensal - total_faturamento),
             "dias_decorridos": dias_decorridos,
             "dias_restantes": dias_restantes,
@@ -322,34 +436,27 @@ def get_mes_atual_data(meta_mensal: float = 50000):
         "graficos": {
             "vendas_por_dia": vendas_dia_lista,
             "categorias": categorias_lista,
-            "formas_pagamento": formas_pagamento_lista,
+            "formas_pagamento": sorted([{"nome": k, "valor": v} for k, v in vendas_por_forma_pagamento.items()], key=lambda x: x['valor'], reverse=True),
             "top_produtos": top_produtos,
             "produtos_por_categoria": produtos_drilldown
         },
         "pedidos_recentes": sorted(pedidos_detalhados, key=lambda x: x['data'], reverse=True)[:20]
     }
-
-# --- (O RESTANTE DO CÓDIGO PERMANECE IGUAL, INCLUINDO O ENDPOINT /resumo) ---
-# APENAS CERTIFIQUE-SE DE USAR get_now_br() NO LUGAR DE datetime.now() NO OUTRO ENDPOINT TAMBÉM SE QUISER PRECISÃO TOTAL
-
+# ==========================================
+# ROTA 4: RESUMO GERAL (MANTIDA E OTIMIZADA)
+# ==========================================
 @app.get("/api/dashboard/resumo")
 def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int = 30):
-    cache = carregar_cache()
+    cache = carregar_cache() # <--- Otimização
     headers = get_headers()
     
     ano_anterior = ano - 1
-    
-    # CORREÇÃO DE TIMEZONE AQUI TAMBÉM
-    agora = get_now_br() 
+    agora = get_now_br()
     
     data_limite_kpi = agora - timedelta(days=dias_kpi)
     data_limite_kpi_anterior = agora - timedelta(days=dias_kpi * 2)
     data_limite_graficos = agora - timedelta(days=dias_graficos)
     
-    # ... Restante do código do endpoint resumo (idêntico ao original) ...
-    # (Copie o conteúdo original da função get_dashboard_data aqui para baixo, 
-    # apenas certifique-se de que a lógica de "vendas_atual" usa a variável 'ano' corretamente)
-
     vendas_atual = {m: 0.0 for m in range(1, 13)}
     vendas_passado = {m: 0.0 for m in range(1, 13)}
     
@@ -363,41 +470,48 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
     pagina = 1
     continuar = True
+    
+    # Aqui precisamos buscar o ano todo, então não dá pra filtrar muito na API
+    # Mas podemos aumentar o limite para 100
     while continuar:
         res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, 
-                          params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc"})
+                           params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc"})
         if res.status_code != 200: break
         items = res.json().get('data', {}).get('items', [])
-        # AQUI TAMBÉM AUMENTEI O LIMITE DE PÁGINAS PARA ANÁLISE HISTÓRICA
-        if not items or pagina > 150: break 
+        
+        # Trava de segurança para não rodar infinito
+        if not items or pagina > 200: break 
 
         for p_resumo in items:
             dt_pedido = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
             valor = float(p_resumo.get('valorTotal', 0))
             situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
+            
             if 'cancelado' in situacao or 'aguardando' in situacao: continue
 
             if dt_pedido.year == ano: vendas_atual[dt_pedido.month] += valor
             elif dt_pedido.year == ano_anterior: vendas_passado[dt_pedido.month] += valor
+            
             if dt_pedido.year < ano_anterior:
                 continuar = False
                 break
 
-            # ... (Lógica de KPI e Cache mantida igual) ...
-            # Obs: Como data_limite_kpi agora é baseada em timezone BR, a comparação será correta
             if dt_pedido.date() >= data_limite_kpi.date():
                 faturamento_periodo += valor
                 pedidos_periodo += 1
-            
             elif dt_pedido.date() >= data_limite_kpi_anterior.date() and dt_pedido.date() < data_limite_kpi.date():
                 faturamento_periodo_anterior += valor
                 pedidos_periodo_anterior += 1
 
+            # Análise de Produtos (Graficos)
             if dt_pedido.date() >= data_limite_graficos.date():
-                codigo_p = p_resumo.get('codigo')
+                codigo_p = str(p_resumo.get('codigo'))
+                # OTIMIZAÇÃO: Tenta cache primeiro
                 if codigo_p not in cache:
-                    det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
-                    cache[codigo_p] = det.get('data', {})
+                    try:
+                        det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
+                        cache[codigo_p] = det.get('data', {})
+                    except: pass
                 
                 p = cache.get(codigo_p)
                 if p:
@@ -415,7 +529,7 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
     salvar_cache(cache)
 
-    # ... (Restante do processamento de produtos mantido igual) ...
+    # Processamento Final (Produtos)
     produtos_final = {}
     for d in analise_produtos:
         key = f"{d['nome']}|{d['codigo']}"
@@ -426,8 +540,7 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
     top_produtos = sorted(produtos_final.values(), key=lambda x: x["qtd"], reverse=True)[:15]
     
     def calcular_crescimento(atual, anterior):
-        if anterior == 0:
-            return 100.0 if atual > 0 else 0.0
+        if anterior == 0: return 100.0 if atual > 0 else 0.0
         return round(((atual - anterior) / anterior) * 100, 1)
     
     ticket_medio_atual = faturamento_periodo / pedidos_periodo if pedidos_periodo else 0
@@ -452,90 +565,8 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
-# ==========================================
-# ROTA 1: GRÁFICOS AVANÇADOS (AGORA EM TEMPO REAL)
-# ==========================================
-@app.get("/api/dashboard/graficos-avancados")
-def get_graficos_avancados(dias: int = 30):
-    # 1. EM VEZ DE LER O CACHE, BUSCAMOS AGORA!
-    # Busca a lista de IDs dos últimos X dias
-    lista_resumo = buscar_lista_periodo(dias)
-    
-    # 2. Busca os detalhes completos usando as Threads (Rápido)
-    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
-    
-    # 3. Processa os dados (igual fazia antes, mas com a lista fresca)
-    vendas_por_estado = defaultdict(float)
-    produtos_tamanho_cor = defaultdict(int)
-
-    for detalhe in pedidos_detalhados:
-        # Estado
-        estado = detalhe.get('estadoSigla', 'N/A')
-        if estado and len(estado) == 2:
-            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
-
-        # Produtos
-        itens = detalhe.get('arrayPedidoRastreio', [])
-        for rastreio in itens:
-            for item in rastreio.get('pedidoItem', []):
-                nome_base = item.get('produtoNome', 'Item')
-                variacao = item.get('produtoDerivacaoNome', '') 
-                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
-                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
-
-    # Formatação para o Frontend
-    return {
-        "geografico": sorted([{"name": k, "valor": v} for k, v in vendas_por_estado.items()], key=lambda x: x["valor"], reverse=True)[:10],
-        "produtos_variacao": sorted([{"name": k, "qtd": v} for k, v in produtos_tamanho_cor.items()], key=lambda x: x["qtd"], reverse=True)[:10]
-    }
-
-# ==========================================
-# ROTA 2: CHURN (AGORA EM TEMPO REAL)
-# ==========================================
-@app.get("/api/dashboard/churn")
-def get_churn_clientes(meses: int = 3):
-    # 1. Busca histórico longo (180 dias fixo para ter base de comparação)
-    lista_resumo = buscar_lista_periodo(180) 
-    
-    # 2. Busca detalhes (precisamos do Email que só vem no detalhe)
-    pedidos_detalhados = buscar_detalhes_tempo_real(lista_resumo)
-    
-    clientes_ultima_compra = {}
-    hoje = get_now_br() # Usa sua função de timezone corrigida
-    dias_corte = meses * 30
-
-    # 3. Processa Churn
-    for detalhe in pedidos_detalhados:
-        email = detalhe.get('pessoaEmail')
-        nome = detalhe.get('pessoaNome')
-        data_str = detalhe.get('dataHora')
-        
-        if email and data_str:
-            try:
-                # Converte string para data
-                dt_pedido = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
-                dias_inativo = (hoje - dt_pedido).days
-
-                # Lógica: Guarda sempre a compra MAIS RECENTE do cliente
-                if email not in clientes_ultima_compra or dias_inativo < clientes_ultima_compra[email]['dias_inativo']:
-                    clientes_ultima_compra[email] = {
-                        "nome": nome,
-                        "email": email,
-                        "data_formatada": dt_pedido.strftime("%d/%m/%Y"),
-                        "dias_inativo": dias_inativo
-                    }
-            except: continue
-
-    # 4. Filtra apenas quem ultrapassou o tempo de corte
-    lista_churn = sorted(
-        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_corte],
-        key=lambda x: x['dias_inativo'], reverse=True
-    )[:50]
-
-    return {
-        "churn": lista_churn
-    }
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Usa porta 8000 para local, ou a que o ambiente pedir
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
