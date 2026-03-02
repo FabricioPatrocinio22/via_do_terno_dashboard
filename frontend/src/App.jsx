@@ -209,7 +209,7 @@ function App() {
             {abaAtiva === 'analitico' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"></div>}
           </button>
           <button onClick={() => setAbaAtiva('mes-atual')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'mes-atual' ? 'text-emerald-600' : 'text-gray-400'}`}>
-            Mês Atual
+            Vendas Por mês
             {abaAtiva === 'mes-atual' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600"></div>}
           </button>
           <button onClick={() => setAbaAtiva('avancado')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'avancado' ? 'text-purple-600' : 'text-gray-400'}`}>
@@ -790,10 +790,10 @@ function DashboardMesAtual({
   formatMoney, 
   metaMensal, 
   setMetaMensal,
-  mesSelecionado,      // <--- NOVA PROP
-  setMesSelecionado,   // <--- NOVA PROP
-  anoSelecionado,      // <--- NOVA PROP
-  setAnoSelecionado    // <--- NOVA PROP
+  mesSelecionado,
+  setMesSelecionado,
+  anoSelecionado,
+  setAnoSelecionado
 }) {
   const [categoriaSelecionada, setCategoriaSelecionada] = useState(null);
 
@@ -801,12 +801,25 @@ function DashboardMesAtual({
 
   const { resumo, graficos, pedidos_recentes } = data;
 
-  // Garantimos que os números sejam tratados como números
-  const faturamentoAtual = Number(resumo.total_faturamento) || 0;
-  const diasDecorridos = Number(resumo.dias_decorridos) || 1;
-  const diasRestantes = Number(resumo.dias_restantes) || 0;
+  // --- ESCUDO DE PROTEÇÃO CONTRA TELA BRANCA ---
+  // Se o dado não existir, ele converte para 0 automaticamente
+  const faturamentoAtual = Number(resumo?.total_faturamento) || 0;
+  const faturamentoAnterior = Number(resumo?.faturamento_anterior) || 0;
+  const crescFaturamento = Number(resumo?.cresc_faturamento) || 0;
+
+  const pedidosAtual = Number(resumo?.total_pedidos) || 0;
+  const pedidosAnterior = Number(resumo?.pedidos_anterior) || 0;
+  const crescPedidos = Number(resumo?.cresc_pedidos) || 0;
+
+  const ticketAtual = Number(resumo?.ticket_medio) || 0;
+  const ticketAnterior = Number(resumo?.ticket_medio_anterior) || 0;
+  const crescTicket = Number(resumo?.cresc_ticket) || 0;
+
+  const diasDecorridos = Number(resumo?.dias_decorridos) || 1;
+  const diasRestantes = Number(resumo?.dias_restantes) || 0;
   const diasTotais = diasDecorridos + diasRestantes;
 
+  // --- CÁLCULOS ---
   const mediaDiaCalculada = diasDecorridos > 0 ? faturamentoAtual / diasDecorridos : 0;
   const projecaoCalculada = mediaDiaCalculada * diasTotais;
   const percentualProgresso = metaMensal > 0 ? (faturamentoAtual / metaMensal) * 100 : 0;
@@ -815,8 +828,8 @@ function DashboardMesAtual({
   const necessarioDia = diasRestantes > 0 ? faltaAtingir / diasRestantes : 0;
 
   const listaProdutosExibida = categoriaSelecionada
-    ? (graficos.produtos_por_categoria?.[categoriaSelecionada] || [])
-    : graficos.top_produtos;
+    ? (graficos?.produtos_por_categoria?.[categoriaSelecionada] || [])
+    : (graficos?.top_produtos || []);
 
   const tituloProdutos = categoriaSelecionada
     ? `Top em ${categoriaSelecionada}`
@@ -892,7 +905,6 @@ function DashboardMesAtual({
           </div>
         </div>
 
-        {/* Barra de Progresso */}
         <div className="w-full bg-gray-200 h-8 rounded-full overflow-hidden relative">
           <div
             className="h-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-1000 flex items-center justify-end px-4"
@@ -902,7 +914,6 @@ function DashboardMesAtual({
           </div>
         </div>
 
-        {/* Grid de Infos Dias */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
           <div className="text-center">
             <p className="text-xs text-gray-400 uppercase font-bold">Dias Decorridos</p>
@@ -923,18 +934,73 @@ function DashboardMesAtual({
         </div>
       </div>
 
+      {/* OS 3 CARDS AVANÇADOS COM PORCENTAGEM */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* Adicione seus ícones ou remova a prop icon se não estiver usando lucide-react aqui */}
-        <KpiCard title="Faturamento Total" value={formatMoney(faturamentoAtual)} accent="emerald" />
-        <KpiCard title="Total de Pedidos" value={resumo.total_pedidos} accent="blue" />
-        <KpiCard title="Ticket Médio" value={formatMoney(resumo.ticket_medio)} accent="violet" />
+        
+        {/* CARD 1: Faturamento */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <p className="text-gray-500 font-bold text-sm uppercase">Faturamento Total</p>
+              <h3 className="text-3xl font-black text-gray-900 mt-1">{formatMoney(faturamentoAtual)}</h3>
+            </div>
+            <div className="p-3 bg-emerald-100 text-emerald-600 rounded-2xl">
+              <DollarSign size={24} />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm mt-auto pt-4 border-t border-gray-50">
+            <span className={`font-bold flex items-center gap-1 ${crescFaturamento >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+              {crescFaturamento >= 0 ? '↑' : '↓'} {Math.abs(crescFaturamento).toFixed(1)}%
+            </span>
+            <span className="text-gray-400 font-medium truncate">vs {formatMoney(faturamentoAnterior)} ant.</span>
+          </div>
+        </div>
+
+        {/* CARD 2: Pedidos */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <p className="text-gray-500 font-bold text-sm uppercase">Total de Pedidos</p>
+              <h3 className="text-3xl font-black text-gray-900 mt-1">{pedidosAtual}</h3>
+            </div>
+            <div className="p-3 bg-blue-100 text-blue-600 rounded-2xl">
+              <ShoppingBag size={24} />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm mt-auto pt-4 border-t border-gray-50">
+            <span className={`font-bold flex items-center gap-1 ${crescPedidos >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+              {crescPedidos >= 0 ? '↑' : '↓'} {Math.abs(crescPedidos).toFixed(1)}%
+            </span>
+            <span className="text-gray-400 font-medium">vs {pedidosAnterior} ant.</span>
+          </div>
+        </div>
+
+        {/* CARD 3: Ticket Médio */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <p className="text-gray-500 font-bold text-sm uppercase">Ticket Médio</p>
+              <h3 className="text-3xl font-black text-gray-900 mt-1">{formatMoney(ticketAtual)}</h3>
+            </div>
+            <div className="p-3 bg-violet-100 text-violet-600 rounded-2xl">
+              <TrendingUp size={24} />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm mt-auto pt-4 border-t border-gray-50">
+            <span className={`font-bold flex items-center gap-1 ${crescTicket >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+              {crescTicket >= 0 ? '↑' : '↓'} {Math.abs(crescTicket).toFixed(1)}%
+            </span>
+            <span className="text-gray-400 font-medium truncate">vs {formatMoney(ticketAnterior)} ant.</span>
+          </div>
+        </div>
       </div>
 
+      {/* RESTANTE DOS GRÁFICOS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 lg:col-span-2">
           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600">Vendas por Dia do Mês</h3>
           <ResponsiveContainer width="100%" height={400}>
-            <BarChart data={graficos.vendas_por_dia} margin={{ top: 20, right: 10, left: 0, bottom: 5 }}>
+            <BarChart data={graficos?.vendas_por_dia || []} margin={{ top: 20, right: 10, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="dia" axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
@@ -989,7 +1055,7 @@ function DashboardMesAtual({
             {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique para detalhar</span>}
           </div>
           <div className="space-y-4">
-            {graficos.categorias.slice(0, 8).map((cat, i) => {
+            {(graficos?.categorias || []).slice(0, 8).map((cat, i) => {
               const isSelected = categoriaSelecionada === cat.nome;
               return (
                 <div key={i} className={`flex flex-col gap-2 cursor-pointer group transition-all duration-200 ${isSelected ? 'opacity-100' : categoriaSelecionada ? 'opacity-40 hover:opacity-70' : ''}`} onClick={() => setCategoriaSelecionada(isSelected ? null : cat.nome)}>
@@ -1012,7 +1078,7 @@ function DashboardMesAtual({
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-violet-600">Formas de Pagamento</h3>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={graficos.formas_pagamento} layout="vertical">
+            <BarChart data={graficos?.formas_pagamento || []} layout="vertical">
               <XAxis type="number" hide />
               <YAxis dataKey="nome" type="category" width={120} tick={{ fontSize: 11, fontWeight: 'bold' }} />
               <Tooltip formatter={(v) => formatMoney(v)} />
@@ -1036,7 +1102,7 @@ function DashboardMesAtual({
               </tr>
             </thead>
             <tbody>
-              {pedidos_recentes.map((pedido, i) => (
+              {(pedidos_recentes || []).map((pedido, i) => (
                 <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                   <td className="py-3 px-4 font-mono text-sm font-bold text-gray-700">{pedido.codigo}</td>
                   <td className="py-3 px-4 text-sm text-gray-600">{pedido.data}</td>
