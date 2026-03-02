@@ -27,6 +27,10 @@ function App() {
   const [abaAtiva, setAbaAtiva] = useState('analitico');
   const [metaMensal, setMetaMensal] = useState(60000);
 
+  // --- NOVOS FILTROS DA ABA MENSAL ---
+  const [mesSelecionado, setMesSelecionado] = useState(new Date().getMonth() + 1);
+  const [anoSelecionado, setAnoSelecionado] = useState(new Date().getFullYear());
+
   // --- NOVOS FILTROS DA ABA AVANÇADA ---
   const [avancadoDias, setAvancadoDias] = useState(30); // Filtro dos Gráficos
   const [avancadoMesesChurn, setAvancadoMesesChurn] = useState(3); // Filtro do Churn
@@ -63,7 +67,7 @@ function App() {
         setLoading(false);
       }
       else if (abaAtiva === 'mes-atual') {
-        const res = await axios.get(`${BASE_API}/api/dashboard/mes-atual?meta_mensal=${metaMensal}`);
+        const res = await axios.get(`${BASE_API}/api/dashboard/mes-atual?meta_mensal=${metaMensal}&mes=${mesSelecionado}&ano=${anoSelecionado}`);
         setDataMesAtual(res.data);
         setLoading(false);
       }
@@ -114,8 +118,10 @@ function App() {
     abaAtiva,
     metaMensal,
     isAuthenticated,
-    avancadoDias,       // <--- NOVO: Recarrega gráficos se mudar dias
-    avancadoMesesChurn  // <--- NOVO: Recarrega churn se mudar meses
+    avancadoDias,
+    avancadoMesesChurn,
+    mesSelecionado, // <--- ADICIONAR AQUI
+    anoSelecionado  // <--- ADICIONAR AQUI
   ]);
 
   const handleLogout = () => {
@@ -233,6 +239,8 @@ function App() {
         {abaAtiva === 'mes-atual' && (
           <DashboardMesAtual
             data={dataMesAtual} formatMoney={formatMoney} metaMensal={metaMensal} setMetaMensal={setMetaMensal}
+            mesSelecionado={mesSelecionado} setMesSelecionado={setMesSelecionado}
+            anoSelecionado={anoSelecionado} setAnoSelecionado={setAnoSelecionado}
           />
         )}
 
@@ -772,36 +780,40 @@ function DashboardAnalitico({
 }
 
 // === COMPONENTE: Dashboard Mês Atual (CORRIGIDO) ===
-// === COMPONENTE: Dashboard Mês Atual (CORRIGIDO) ===
-function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
+// Não esqueça de importar o useState se ele estiver em um arquivo separado
+// import React, { useState } from 'react';
+// import { DollarSign, ShoppingBag, TrendingUp, Calendar, Award, Tag } from 'lucide-react'; // Ajuste os ícones conforme os seus imports
+// ... e os imports do Recharts (BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer)
+
+function DashboardMesAtual({ 
+  data, 
+  formatMoney, 
+  metaMensal, 
+  setMetaMensal,
+  mesSelecionado,      // <--- NOVA PROP
+  setMesSelecionado,   // <--- NOVA PROP
+  anoSelecionado,      // <--- NOVA PROP
+  setAnoSelecionado    // <--- NOVA PROP
+}) {
   const [categoriaSelecionada, setCategoriaSelecionada] = useState(null);
 
   if (!data) return <div className="text-center text-gray-500 py-10">Carregando dados do mês...</div>;
 
   const { resumo, graficos, pedidos_recentes } = data;
 
-  // --- CÁLCULOS NO FRONTEND (CORREÇÃO) ---
   // Garantimos que os números sejam tratados como números
   const faturamentoAtual = Number(resumo.total_faturamento) || 0;
   const diasDecorridos = Number(resumo.dias_decorridos) || 1;
   const diasRestantes = Number(resumo.dias_restantes) || 0;
   const diasTotais = diasDecorridos + diasRestantes;
 
-  // 1. Média Diária Real (Faturamento / Dias que já passaram)
   const mediaDiaCalculada = diasDecorridos > 0 ? faturamentoAtual / diasDecorridos : 0;
-
-  // 2. Projeção (Média Diária * Dias Totais do Mês)
   const projecaoCalculada = mediaDiaCalculada * diasTotais;
-
-  // 3. Percentual da Meta (Faturamento / Meta Definida pelo usuário)
   const percentualProgresso = metaMensal > 0 ? (faturamentoAtual / metaMensal) * 100 : 0;
   const percentualBarra = Math.min(100, percentualProgresso);
-
-  // 4. Falta Atingir e Necessário por Dia
   const faltaAtingir = Math.max(0, metaMensal - faturamentoAtual);
   const necessarioDia = diasRestantes > 0 ? faltaAtingir / diasRestantes : 0;
 
-  // Lógica do Drill Down (Mantida igual)
   const listaProdutosExibida = categoriaSelecionada
     ? (graficos.produtos_por_categoria?.[categoriaSelecionada] || [])
     : graficos.top_produtos;
@@ -812,13 +824,46 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
 
   return (
     <>
-      {/* HEADER DO MÊS */}
+      {/* HEADER DO MÊS COM FILTROS */}
       <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 p-8 rounded-3xl shadow-lg mb-8 text-white">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h2 className="text-3xl font-black mb-2">Performance do Mês</h2>
-            <p className="text-emerald-100 text-lg">{resumo.mes_ano}</p>
+            <h2 className="text-3xl font-black mb-3">Performance Mensal</h2>
+            
+            {/* SELETORES DE MÊS E ANO */}
+            <div className="flex items-center gap-3">
+              <select
+                value={mesSelecionado}
+                onChange={(e) => setMesSelecionado(Number(e.target.value))}
+                className="bg-white/20 text-white border border-emerald-400/50 rounded-xl px-4 py-2 outline-none font-bold focus:bg-emerald-700 transition-colors cursor-pointer appearance-none"
+              >
+                <option value={1} className="text-gray-800">Janeiro</option>
+                <option value={2} className="text-gray-800">Fevereiro</option>
+                <option value={3} className="text-gray-800">Março</option>
+                <option value={4} className="text-gray-800">Abril</option>
+                <option value={5} className="text-gray-800">Maio</option>
+                <option value={6} className="text-gray-800">Junho</option>
+                <option value={7} className="text-gray-800">Julho</option>
+                <option value={8} className="text-gray-800">Agosto</option>
+                <option value={9} className="text-gray-800">Setembro</option>
+                <option value={10} className="text-gray-800">Outubro</option>
+                <option value={11} className="text-gray-800">Novembro</option>
+                <option value={12} className="text-gray-800">Dezembro</option>
+              </select>
+
+              <select
+                value={anoSelecionado}
+                onChange={(e) => setAnoSelecionado(Number(e.target.value))}
+                className="bg-white/20 text-white border border-emerald-400/50 rounded-xl px-4 py-2 outline-none font-bold focus:bg-emerald-700 transition-colors cursor-pointer appearance-none"
+              >
+                <option value={2024} className="text-gray-800">2024</option>
+                <option value={2025} className="text-gray-800">2025</option>
+                <option value={2026} className="text-gray-800">2026</option>
+                <option value={2027} className="text-gray-800">2027</option>
+              </select>
+            </div>
           </div>
+          
           <div className="bg-white/20 backdrop-blur-sm px-6 py-3 rounded-2xl">
             <p className="text-xs font-semibold mb-1 text-emerald-100">Meta Mensal</p>
             <div className="flex items-center gap-2">
@@ -842,8 +887,7 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
             <p className="text-gray-500 text-sm mt-1">Faltam {formatMoney(faltaAtingir)}</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-gray-400 uppercase font-bold">Projeção</p>
-            {/* AQUI USAMOS A VARIÁVEL CALCULADA */}
+            <p className="text-xs text-gray-400 uppercase font-bold">Projeção do Mês</p>
             <p className="text-xl font-black text-blue-600">{formatMoney(projecaoCalculada)}</p>
           </div>
         </div>
@@ -870,27 +914,25 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
           </div>
           <div className="text-center">
             <p className="text-xs text-gray-400 uppercase font-bold">Média/Dia Atual</p>
-            {/* USANDO VARIÁVEL CALCULADA */}
             <p className="text-2xl font-black text-emerald-600">{formatMoney(mediaDiaCalculada)}</p>
           </div>
           <div className="text-center">
             <p className="text-xs text-gray-400 uppercase font-bold">Necessário/Dia</p>
-            {/* USANDO VARIÁVEL CALCULADA */}
             <p className="text-2xl font-black text-orange-600">{formatMoney(necessarioDia)}</p>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <KpiCard title="Faturamento Total" value={formatMoney(faturamentoAtual)} icon={<DollarSign size={28} />} accent="emerald" />
-        <KpiCard title="Total de Pedidos" value={resumo.total_pedidos} icon={<ShoppingBag size={28} />} accent="blue" />
-        <KpiCard title="Ticket Médio" value={formatMoney(resumo.ticket_medio)} icon={<TrendingUp size={28} />} accent="violet" />
+        {/* Adicione seus ícones ou remova a prop icon se não estiver usando lucide-react aqui */}
+        <KpiCard title="Faturamento Total" value={formatMoney(faturamentoAtual)} accent="emerald" />
+        <KpiCard title="Total de Pedidos" value={resumo.total_pedidos} accent="blue" />
+        <KpiCard title="Ticket Médio" value={formatMoney(resumo.ticket_medio)} accent="violet" />
       </div>
 
-      {/* --- O RESTANTE DOS GRÁFICOS (Vendas por dia, Categorias, etc) PERMANECE IGUAL --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 lg:col-span-2">
-          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600"><Calendar size={22} /> Vendas por Dia do Mês</h3>
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600">Vendas por Dia do Mês</h3>
           <ResponsiveContainer width="100%" height={400}>
             <BarChart data={graficos.vendas_por_dia} margin={{ top: 20, right: 10, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -914,7 +956,6 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
         <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-100 transition-all duration-300 ${categoriaSelecionada ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`}>
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-lg flex items-center gap-2 text-orange-600 truncate pr-2">
-              <Award size={22} />
               <span className="truncate" title={tituloProdutos}>{tituloProdutos}</span>
             </h3>
             {categoriaSelecionada && (
@@ -944,7 +985,7 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="font-bold text-lg flex items-center gap-2 text-blue-600"><Tag size={22} /> Vendas por Categoria</h3>
+            <h3 className="font-bold text-lg flex items-center gap-2 text-blue-600">Vendas por Categoria</h3>
             {!categoriaSelecionada && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Clique para detalhar</span>}
           </div>
           <div className="space-y-4">
@@ -969,7 +1010,7 @@ function DashboardMesAtual({ data, formatMoney, metaMensal, setMetaMensal }) {
         </div>
 
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-violet-600"><DollarSign size={22} /> Formas de Pagamento</h3>
+          <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-violet-600">Formas de Pagamento</h3>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={graficos.formas_pagamento} layout="vertical">
               <XAxis type="number" hide />

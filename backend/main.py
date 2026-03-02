@@ -285,14 +285,23 @@ def get_churn_clientes(meses: int = 3):
 # ROTA 3: MÊS ATUAL (MANTIDA DO SEU CÓDIGO)
 # ==========================================
 @app.get("/api/dashboard/mes-atual")
-def get_mes_atual_data(meta_mensal: float = 60000):
-    cache = carregar_cache() # <--- Otimização: Agora lê do cache se tiver
+def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = None):
+    cache = carregar_cache()
     headers = get_headers()
     
     hoje = get_now_br()
     
-    if hoje.month == 12: proximo_mes = hoje.replace(year=hoje.year + 1, month=1, day=1)
-    else: proximo_mes = hoje.replace(month=hoje.month + 1, day=1)
+    # --- NOVO: LÓGICA DE SELEÇÃO DE MÊS/ANO ---
+    # Se o front-end enviou um mês, a gente usa. Se não, usa o de hoje.
+    alvo_mes = mes if mes is not None else hoje.month
+    alvo_ano = ano if ano is not None else hoje.year
+    
+    # Cria uma data "fake" que representa o dia 1 do mês que o usuário escolheu
+    data_alvo = datetime(alvo_ano, alvo_mes, 1, tzinfo=timezone.utc)
+    
+    # Calcula qual é o último dia do mês escolhido
+    if alvo_mes == 12: proximo_mes = datetime(alvo_ano + 1, 1, 1, tzinfo=timezone.utc)
+    else: proximo_mes = datetime(alvo_ano, alvo_mes + 1, 1, tzinfo=timezone.utc)
         
     ultimo_dia_mes_date = proximo_mes - timedelta(days=1)
     ultimo_dia_mes = ultimo_dia_mes_date.day
@@ -309,12 +318,23 @@ def get_mes_atual_data(meta_mensal: float = 60000):
     vendas_por_forma_pagamento = defaultdict(float)
     pedidos_detalhados = []
 
-    # Busca apenas pedidos deste mês
-    data_inicio_mes = hoje.replace(day=1).strftime("%Y-%m-%d")
+    # O dataInicio da API da Magazord agora será o dia 1 do mês selecionado
+    data_inicio_mes = data_alvo.strftime("%Y-%m-%d")
+    
+    # Precisamos de um dataFim para não trazer meses à frente caso seja um mês antigo
+    data_fim_mes = ultimo_dia_mes_date.strftime("%Y-%m-%d")
 
     while continuar:
+        # Adicionamos dataFim na chamada da API
         res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, 
-                           params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc", "dataInicio": data_inicio_mes})
+                           params={
+                               "limit": 100, 
+                               "page": pagina, 
+                               "order": "dataHora", 
+                               "orderDirection": "desc", 
+                               "dataInicio": data_inicio_mes,
+                               "dataFim": data_fim_mes
+                            })
         
         if res.status_code != 200: break
         items = res.json().get('data', {}).get('items', [])
@@ -324,15 +344,13 @@ def get_mes_atual_data(meta_mensal: float = 60000):
             try:
                 dt_pedido = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
                 
-                # Proteção extra de data
-                if dt_pedido.month != hoje.month or dt_pedido.year != hoje.year:
+                # Proteção extra: garante que só entra pedido do mês/ano alvo
+                if dt_pedido.month != alvo_mes or dt_pedido.year != alvo_ano:
                     continue
                 
-                # --- NOVO: CÁLCULO DESCONTANDO O FRETE ---
+                # Cálculo Sem Frete
                 valor_total = float(p_resumo.get('valorTotal') or 0)
                 valor_frete = float(p_resumo.get('valorFrete') or 0)
-                
-                # A variável 'valor' agora representa apenas os PRODUTOS (líquido)
                 valor = valor_total - valor_frete
                 
                 situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
@@ -344,12 +362,16 @@ def get_mes_atual_data(meta_mensal: float = 60000):
                 vendas_por_dia[dt_pedido.day]["valor"] += valor
                 vendas_por_dia[dt_pedido.day]["qtd"] += 1
                 
-                # --- OTIMIZAÇÃO: Tenta pegar do cache antes de baixar ---
+                # Otimização de Cache (Pula se for 'Aguardando Pagamento' para evitar baixar boletos não pagos)
+                # Opcional: Se quiser que mostre os produtos de quem não pagou ainda, comente a linha abaixo.
+                if 'aguardando' in situacao: continue
+
                 codigo_p = str(p_resumo.get('codigo'))
                 if codigo_p not in cache:
-                    # Se não tem, baixa e salva
-                    det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
-                    cache[codigo_p] = det.get('data', {})
+                    try:
+                        det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
+                        cache[codigo_p] = det.get('data', {})
+                    except: pass
                 
                 pedido_det = cache.get(codigo_p)
                 
@@ -373,7 +395,7 @@ def get_mes_atual_data(meta_mensal: float = 60000):
                     pedidos_detalhados.append({
                         "codigo": codigo_p,
                         "data": dt_pedido.strftime("%d/%m/%Y"),
-                        "valor": valor, # <-- Aqui será exibido o valor descontado o frete
+                        "valor": valor, 
                         "situacao": p_resumo.get('pedidoSituacaoDescricao'),
                         "cliente": cliente_nome
                     })
@@ -382,10 +404,8 @@ def get_mes_atual_data(meta_mensal: float = 60000):
         pagina += 1
         if pagina > 50: break
 
-    # Salva o que baixou nessa rota também
     salvar_cache(cache)
     
-    # Processamento Final (Agrupamentos)
     produtos_agrupados_geral = defaultdict(lambda: {"qtd": 0, "valor": 0.0})
     produtos_agrupados_cat = defaultdict(lambda: defaultdict(lambda: {"qtd": 0, "valor": 0.0}))
 
@@ -414,10 +434,17 @@ def get_mes_atual_data(meta_mensal: float = 60000):
         key=lambda x: x['valor'], reverse=True
     )
 
-    dias_decorridos = hoje.day
+    # Lógica ajustada: se for mês passado, dias_decorridos = ultimo_dia_mes
+    se_mes_passado = (alvo_mes < hoje.month and alvo_ano <= hoje.year) or (alvo_ano < hoje.year)
+    dias_decorridos = ultimo_dia_mes if se_mes_passado else hoje.day
     dias_restantes = ultimo_dia_mes - dias_decorridos
+    
     media_dia = total_faturamento / dias_decorridos if dias_decorridos > 0 else 0
     projecao_mes = media_dia * ultimo_dia_mes
+
+    # Formata o nome do mês (ex: "Fevereiro/2026")
+    nome_meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    mes_ano_formatado = f"{nome_meses[alvo_mes - 1]}/{alvo_ano}"
 
     return {
         "resumo": {
@@ -431,7 +458,7 @@ def get_mes_atual_data(meta_mensal: float = 60000):
             "dias_restantes": dias_restantes,
             "media_dia": media_dia,
             "projecao_mes": projecao_mes,
-            "mes_ano": hoje.strftime("%m/%Y")
+            "mes_ano": mes_ano_formatado
         },
         "graficos": {
             "vendas_por_dia": vendas_dia_lista,
@@ -484,10 +511,16 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
         for p_resumo in items:
             dt_pedido = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
-            valor = float(p_resumo.get('valorTotal', 0))
             situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
             
             if 'cancelado' in situacao or 'aguardando' in situacao: continue
+
+            # --- NOVO: CÁLCULO DESCONTANDO O FRETE ---
+            valor_total = float(p_resumo.get('valorTotal') or 0)
+            valor_frete = float(p_resumo.get('valorFrete') or 0)
+            
+            # A variável 'valor' agora representa apenas o Faturamento Líquido (Produtos)
+            valor = valor_total - valor_frete
 
             if dt_pedido.year == ano: vendas_atual[dt_pedido.month] += valor
             elif dt_pedido.year == ano_anterior: vendas_passado[dt_pedido.month] += valor
