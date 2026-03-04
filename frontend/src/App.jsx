@@ -25,11 +25,31 @@ function App() {
   const [periodoKpi, setPeriodoKpi] = useState(30);
   const [periodoGraficos, setPeriodoGraficos] = useState(30);
   const [abaAtiva, setAbaAtiva] = useState('analitico');
-  const [metaMensal, setMetaMensal] = useState(60000);
 
   // --- NOVOS FILTROS DA ABA MENSAL ---
   const [mesSelecionado, setMesSelecionado] = useState(new Date().getMonth() + 1);
   const [anoSelecionado, setAnoSelecionado] = useState(new Date().getFullYear());
+
+  // --- DICIONÁRIO DE METAS POR MÊS/ANO ---
+  const [metasMensais, setMetasMensais] = useState({
+    "1-2026": 50000, // Janeiro 2026 = 50 mil
+    "2-2026": 60000, // Fevereiro 2026 = 60 mil
+    "3-2026": 70000  // Março 2026 = 70 mil
+  });
+
+  // Descobre qual é a meta do mês que o usuário está olhando agora
+  // (Se ele for para um mês que não tem meta definida, assume 60000 como padrão)
+  const metaMensalAtiva = metasMensais[`${mesSelecionado}-${anoSelecionado}`] || 60000;
+
+  // Função para salvar se você digitar um valor novo lá na caixinha do painel
+  const handleAtualizarMeta = (novoValor) => {
+    setMetasMensais(prev => ({
+      ...prev,
+      [`${mesSelecionado}-${anoSelecionado}`]: novoValor
+    }));
+  };
+
+
 
   // --- NOVOS FILTROS DA ABA AVANÇADA ---
   const [avancadoDias, setAvancadoDias] = useState(30); // Filtro dos Gráficos
@@ -58,16 +78,27 @@ function App() {
     if (abaAtiva !== 'avancado') setLoading(true);
 
     try {
-      //const BASE_API = "https://api-viadoterno.onrender.com";
-      const BASE_API = "http://localhost:8000";
+      const BASE_API = "https://api-viadoterno.onrender.com";
+      //const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
-        const res = await axios.get(`${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`);
+        // Montamos a URL base com os filtros padrões
+        let url = `${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`;
+
+        // Se estiver em modo customizado e as datas estiverem preenchidas, adicionamos na URL
+        if (modoKpiCustomizado && kpiDataInicio && kpiDataFim) {
+          url += `&kpi_inicio=${kpiDataInicio}&kpi_fim=${kpiDataFim}`;
+        }
+        if (modoGraficosCustomizado && graficosDataInicio && graficosDataFim) {
+          url += `&graficos_inicio=${graficosDataInicio}&graficos_fim=${graficosDataFim}`;
+        }
+
+        const res = await axios.get(url);
         setData(res.data);
         setLoading(false);
       }
       else if (abaAtiva === 'mes-atual') {
-        const res = await axios.get(`${BASE_API}/api/dashboard/mes-atual?meta_mensal=${metaMensal}&mes=${mesSelecionado}&ano=${anoSelecionado}`);
+        const res = await axios.get(`${BASE_API}/api/dashboard/mes-atual?meta_mensal=${metaMensalAtiva}&mes=${mesSelecionado}&ano=${anoSelecionado}`);
         setDataMesAtual(res.data);
         setLoading(false);
       }
@@ -116,7 +147,7 @@ function App() {
     periodoKpi,
     periodoGraficos,
     abaAtiva,
-    metaMensal,
+    metaMensalAtiva,
     isAuthenticated,
     avancadoDias,
     avancadoMesesChurn,
@@ -135,9 +166,9 @@ function App() {
 
   // Função para forçar atualização APENAS do Churn (Botão Sincronizar)
   const syncChurnOnly = () => {
-    //const BASE_API = "https://api-viadoterno.onrender.com";
-    const BASE_API = "http://localhost:8000";
-    
+    const BASE_API = "https://api-viadoterno.onrender.com";
+    //const BASE_API = "http://localhost:8000";
+
     setLoadingChurn(true);
     axios.get(`${BASE_API}/api/dashboard/churn?meses=${avancadoMesesChurn}`)
       .then(res => {
@@ -160,8 +191,15 @@ function App() {
 
   const formatarPeriodo = (dias, dataInicio) => { if (!dataInicio) return `${dias} dias`; return "Período"; };
   const obterLabelPeriodo = (dias, dataInicio) => { if (dataInicio) return "Customizado"; return `${dias} dias`; };
-  const aplicarPeriodoKpiCustomizado = () => { /* ... */ };
-  const aplicarPeriodoGraficosCustomizado = () => { /* ... */ };
+  const aplicarPeriodoKpiCustomizado = () => {
+    // Apenas chamamos o fetchData novamente.
+    // Como os estados de DataInicio e DataFim já estão atualizados,
+    // o fetchData vai montar a URL corretamente (passo 1 acima).
+    fetchData();
+  };
+  const aplicarPeriodoGraficosCustomizado = () => {
+    fetchData();
+  };
   const CORES_CATEGORIA = ['#059669', '#2563eb', '#7c3aed', '#c2410c', '#be123c', '#0d9488', '#4f46e5', '#ea580c', '#0891b2', '#65a30d'];
   const formatarNomeCategoria = (nome) => nome;
 
@@ -238,9 +276,17 @@ function App() {
 
         {abaAtiva === 'mes-atual' && (
           <DashboardMesAtual
-            data={dataMesAtual} formatMoney={formatMoney} metaMensal={metaMensal} setMetaMensal={setMetaMensal}
-            mesSelecionado={mesSelecionado} setMesSelecionado={setMesSelecionado}
-            anoSelecionado={anoSelecionado} setAnoSelecionado={setAnoSelecionado}
+            data={dataMesAtual}
+            formatMoney={formatMoney}
+
+            // Enviamos a meta ativa e a função nova:
+            metaMensal={metaMensalAtiva}
+            setMetaMensal={handleAtualizarMeta}
+
+            mesSelecionado={mesSelecionado}
+            setMesSelecionado={setMesSelecionado}
+            anoSelecionado={anoSelecionado}
+            setAnoSelecionado={setAnoSelecionado}
           />
         )}
 
@@ -397,8 +443,8 @@ function LoginPage({ onLoginSuccess }) {
 
     try {
       // AJUSTE SEU IP AQUI TBM
-      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      await axios.post('http://localhost:8000/api/login', { username, password });
+      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      //await axios.post('http://localhost:8000/api/login', { username, password });
 
       // Se deu certo:
       localStorage.setItem('via_token', 'logado_com_sucesso');
@@ -785,10 +831,10 @@ function DashboardAnalitico({
 // import { DollarSign, ShoppingBag, TrendingUp, Calendar, Award, Tag } from 'lucide-react'; // Ajuste os ícones conforme os seus imports
 // ... e os imports do Recharts (BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer)
 
-function DashboardMesAtual({ 
-  data, 
-  formatMoney, 
-  metaMensal, 
+function DashboardMesAtual({
+  data,
+  formatMoney,
+  metaMensal,
   setMetaMensal,
   mesSelecionado,
   setMesSelecionado,
@@ -842,7 +888,7 @@ function DashboardMesAtual({
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h2 className="text-3xl font-black mb-3">Performance Mensal</h2>
-            
+
             {/* SELETORES DE MÊS E ANO */}
             <div className="flex items-center gap-3">
               <select
@@ -876,7 +922,7 @@ function DashboardMesAtual({
               </select>
             </div>
           </div>
-          
+
           <div className="bg-white/20 backdrop-blur-sm px-6 py-3 rounded-2xl">
             <p className="text-xs font-semibold mb-1 text-emerald-100">Meta Mensal</p>
             <div className="flex items-center gap-2">
@@ -936,7 +982,7 @@ function DashboardMesAtual({
 
       {/* OS 3 CARDS AVANÇADOS COM PORCENTAGEM */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        
+
         {/* CARD 1: Faturamento */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
           <div className="flex justify-between items-start mb-2">

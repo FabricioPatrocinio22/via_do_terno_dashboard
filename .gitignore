@@ -5,3 +5,5 @@ node_modules
 dist
 users.json
 cache_pedidos.json
+sentinela.py
+teste_img.py

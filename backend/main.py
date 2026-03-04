@@ -491,17 +491,41 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
 # ROTA 4: RESUMO GERAL (MANTIDA E OTIMIZADA)
 # ==========================================
 @app.get("/api/dashboard/resumo")
-def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int = 30):
+def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int = 30, kpi_inicio: str = None, kpi_fim: str = None, graficos_inicio: str = None, graficos_fim: str = None):
     cache = carregar_cache() # <--- Otimização
     headers = get_headers()
     
     ano_anterior = ano - 1
     agora = get_now_br()
     
-    data_limite_kpi = agora - timedelta(days=dias_kpi)
-    data_limite_kpi_anterior = agora - timedelta(days=dias_kpi * 2)
-    data_limite_graficos = agora - timedelta(days=dias_graficos)
+    # ==========================================
+    # 1. DEFINIÇÃO DAS DATAS DOS KPIs
+    # ==========================================
+    if kpi_inicio and kpi_fim:
+        # Se vieram datas personalizadas da URL, usa elas
+        data_limite_kpi = datetime.strptime(kpi_inicio, "%Y-%m-%d").date()
+        data_fim_kpi_real = datetime.strptime(kpi_fim, "%Y-%m-%d").date()
+        dias_diferenca = (data_fim_kpi_real - data_limite_kpi).days + 1
+        data_limite_kpi_anterior = data_limite_kpi - timedelta(days=dias_diferenca)
+    else:
+        # Se NÃO vieram datas, usa a lógica ORIGINAL
+        data_limite_kpi = (agora - timedelta(days=dias_kpi)).date()
+        data_fim_kpi_real = agora.date()
+        data_limite_kpi_anterior = (agora - timedelta(days=dias_kpi * 2)).date()
+
+    # ==========================================
+    # 2. DEFINIÇÃO DAS DATAS DOS GRÁFICOS E PRODUTOS
+    # ==========================================
+    if graficos_inicio and graficos_fim:
+        # Se vieram datas personalizadas, usa elas
+        data_limite_graficos = datetime.strptime(graficos_inicio, "%Y-%m-%d").date()
+        data_fim_graficos_real = datetime.strptime(graficos_fim, "%Y-%m-%d").date()
+    else:
+        # Lógica ORIGINAL
+        data_limite_graficos = (agora - timedelta(days=dias_graficos)).date()
+        data_fim_graficos_real = agora.date()
     
+    # Variáveis Originais mantidas
     vendas_atual = {m: 0.0 for m in range(1, 13)}
     vendas_passado = {m: 0.0 for m in range(1, 13)}
     
@@ -516,48 +540,46 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
     pagina = 1
     continuar = True
     
-    # Aqui precisamos buscar o ano todo, então não dá pra filtrar muito na API
-    # Mas podemos aumentar o limite para 100
     while continuar:
         res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, 
                            params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc"})
         if res.status_code != 200: break
         items = res.json().get('data', {}).get('items', [])
         
-        # Trava de segurança para não rodar infinito
+        # Trava de segurança original
         if not items or pagina > 200: break 
 
         for p_resumo in items:
-            dt_pedido = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
+            dt_pedido_full = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
+            dt_pedido = dt_pedido_full.date() # Extrai apenas a data para ficar fácil de comparar
             situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
             
             if 'cancelado' in situacao or 'aguardando' in situacao: continue
 
-            # --- NOVO: CÁLCULO DESCONTANDO O FRETE ---
+            # --- CÁLCULO DESCONTANDO O FRETE (Mantido) ---
             valor_total = float(p_resumo.get('valorTotal') or 0)
             valor_frete = float(p_resumo.get('valorFrete') or 0)
-            
-            # A variável 'valor' agora representa apenas o Faturamento Líquido (Produtos)
             valor = valor_total - valor_frete
 
-            if dt_pedido.year == ano: vendas_atual[dt_pedido.month] += valor
-            elif dt_pedido.year == ano_anterior: vendas_passado[dt_pedido.month] += valor
+            if dt_pedido_full.year == ano: vendas_atual[dt_pedido_full.month] += valor
+            elif dt_pedido_full.year == ano_anterior: vendas_passado[dt_pedido_full.month] += valor
             
-            if dt_pedido.year < ano_anterior:
+            if dt_pedido_full.year < ano_anterior:
                 continuar = False
                 break
 
-            if dt_pedido.date() >= data_limite_kpi.date():
+            # --- FILTROS DOS KPIs COM SUPORTE A DATAS CUSTOMIZADAS ---
+            if dt_pedido >= data_limite_kpi and dt_pedido <= data_fim_kpi_real:
                 faturamento_periodo += valor
                 pedidos_periodo += 1
-            elif dt_pedido.date() >= data_limite_kpi_anterior.date() and dt_pedido.date() < data_limite_kpi.date():
+            elif dt_pedido >= data_limite_kpi_anterior and dt_pedido < data_limite_kpi:
                 faturamento_periodo_anterior += valor
                 pedidos_periodo_anterior += 1
 
-            # Análise de Produtos (Graficos)
-            if dt_pedido.date() >= data_limite_graficos.date():
+            # --- FILTROS DE PRODUTOS/GRÁFICOS COM SUPORTE A DATAS CUSTOMIZADAS ---
+            if dt_pedido >= data_limite_graficos and dt_pedido <= data_fim_graficos_real:
                 codigo_p = str(p_resumo.get('codigo'))
-                # OTIMIZAÇÃO: Tenta cache primeiro
+                # OTIMIZAÇÃO: Tenta cache primeiro (Mantido)
                 if codigo_p not in cache:
                     try:
                         det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
@@ -580,7 +602,7 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
     salvar_cache(cache)
 
-    # Processamento Final (Produtos)
+    # Processamento Final (Produtos) - Mantido igualzinho
     produtos_final = {}
     for d in analise_produtos:
         key = f"{d['nome']}|{d['codigo']}"
