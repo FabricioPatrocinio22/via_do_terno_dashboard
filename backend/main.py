@@ -638,6 +638,88 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         }
     }
 
+
+# ==========================================
+# ROTA: CARRINHOS ABANDONADOS (COM LEAD)
+# ==========================================
+@app.get("/api/dashboard/carrinhos-abandonados")
+def get_carrinhos_abandonados(dias: int = 7):
+    headers = get_headers()
+    hoje = get_now_br()
+    data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
+    data_fim = hoje.strftime("%Y-%m-%d")
+
+    # 1. Busca a lista resumida
+    res = requests.get(
+        f"{BASE_URL}/v2/site/carrinho", 
+        auth=(USUARIO, SENHA), 
+        params={
+            "limit": 100, 
+            "order": "id",
+            "orderDirection": "desc", 
+            "dataAtualizacaoInicio": data_inicio,
+            "dataAtualizacaoFim": data_fim
+        }
+    )
+    
+    if res.status_code != 200:
+        return {"carrinhos": []}
+
+    itens_brutos = res.json().get('data', {}).get('items', [])
+    
+    # ==========================================
+    # 💥 O FILTRO MÁGICO QUE REMOVE COMPRAS FINALIZADAS
+    # Só mantemos o carrinho se o campo "pedido" estiver vazio (None)
+    # ==========================================
+    itens_resumo = [item for item in itens_brutos if not item.get('pedido')]
+
+    leads_encontrados = []
+
+    # 2. Função para buscar o detalhe de cada carrinho (será usada em paralelo)
+    def fetch_carrinho_detail(item):
+        cid = item.get('id')
+        try:
+            res_det = requests.get(f"{BASE_URL}/v2/site/carrinho/{cid}/itens", auth=(USUARIO, SENHA), timeout=10)
+            if res_det.status_code == 200:
+                dados = res_det.json().get('data', {}).get('carrinho', {})
+                pessoa = dados.get('pessoa', {})
+                
+                # Só retorna se tiver contato
+                if pessoa and (pessoa.get('email') or pessoa.get('contato_principal')):
+                    # Formata data
+                    dt_str = dados.get('ultima_atualizacao', item.get('dataAtualizacao', ''))
+                    try:
+                        dt_obj = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S")
+                        data_pt = dt_obj.strftime("%d/%m/%Y %H:%M")
+                    except:
+                        data_pt = dt_str
+
+                    return {
+                        "id": cid,
+                        "data": data_pt,
+                        "nome": pessoa.get('nome'),
+                        "email": pessoa.get('email'),
+                        "telefone": pessoa.get('contato_principal'),
+                        "url_checkout": dados.get('url_checkout'),
+                        "total_itens": len(dados.get('itens', [])),
+                        "produtos": [
+                            {"nome": i.get('produto_nome', 'Produto'), "img": i.get('midia_url')} 
+                            for i in dados.get('itens', [])
+                        ]
+                    }
+        except: pass
+        return None
+
+    # 3. Execução em paralelo para ser rápido
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(fetch_carrinho_detail, itens_resumo))
+        leads_encontrados = [r for r in results if r is not None]
+
+    # --- ADICIONE ESTA LINHA ---
+    leads_encontrados.sort(key=lambda x: x["id"], reverse=True)
+
+    return {"carrinhos": leads_encontrados}
+
 if __name__ == "__main__":
     import uvicorn
     # Usa porta 8000 para local, ou a que o ambiente pedir

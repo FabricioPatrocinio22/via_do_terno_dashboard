@@ -63,6 +63,9 @@ function App() {
   const [graficosDataInicio, setGraficosDataInicio] = useState('');
   const [graficosDataFim, setGraficosDataFim] = useState('');
 
+  // 1. Novo Estado
+  const [dataCarrinhos, setDataCarrinhos] = useState(null);
+
   useEffect(() => {
     const token = localStorage.getItem('via_token');
     if (token === 'logado_com_sucesso') {
@@ -78,8 +81,8 @@ function App() {
     if (abaAtiva !== 'avancado') setLoading(true);
 
     try {
-      const BASE_API = "https://api-viadoterno.onrender.com";
-      //const BASE_API = "http://localhost:8000";
+      //const BASE_API = "https://api-viadoterno.onrender.com";
+      const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
         // Montamos a URL base com os filtros padrões
@@ -129,6 +132,12 @@ function App() {
             setLoadingChurn(false);
           });
       }
+      // 2. Atualize o fetchData (dentro do try)
+      else if (abaAtiva === 'carrinhos') {
+        const res = await axios.get(`${BASE_API}/api/dashboard/carrinhos-abandonados?dias=30`);
+        setDataCarrinhos(res.data);
+        setLoading(false);
+      }
     } catch (err) {
       console.error("Erro geral:", err);
       setLoading(false);
@@ -166,8 +175,8 @@ function App() {
 
   // Função para forçar atualização APENAS do Churn (Botão Sincronizar)
   const syncChurnOnly = () => {
-    const BASE_API = "https://api-viadoterno.onrender.com";
-    //const BASE_API = "http://localhost:8000";
+    //const BASE_API = "https://api-viadoterno.onrender.com";
+    const BASE_API = "http://localhost:8000";
 
     setLoadingChurn(true);
     axios.get(`${BASE_API}/api/dashboard/churn?meses=${avancadoMesesChurn}`)
@@ -254,6 +263,10 @@ function App() {
             Estratégico & Churn
             {abaAtiva === 'avancado' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>}
           </button>
+          <button onClick={() => setAbaAtiva('carrinhos')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'carrinhos' ? 'text-orange-600' : 'text-gray-400'}`}>
+            Recuperação de Carrinho
+            {abaAtiva === 'carrinhos' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-orange-600"></div>}
+          </button>
         </div>
 
         {/* RENDERIZAÇÃO CONDICIONAL DAS ABAS */}
@@ -307,6 +320,9 @@ function App() {
 
             onSyncChurn={syncChurnOnly}
           />
+        )}
+        {abaAtiva === 'carrinhos' && (
+          <DashboardCarrinhos data={dataCarrinhos} formatMoney={formatMoney} />
         )}
       </div>
     </div>
@@ -443,8 +459,8 @@ function LoginPage({ onLoginSuccess }) {
 
     try {
       // AJUSTE SEU IP AQUI TBM
-      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      //await axios.post('http://localhost:8000/api/login', { username, password });
+      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      await axios.post('http://localhost:8000/api/login', { username, password });
 
       // Se deu certo:
       localStorage.setItem('via_token', 'logado_com_sucesso');
@@ -1215,6 +1231,76 @@ function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
             </span>
           )}
           <span className="text-xs text-gray-400 ml-1">vs período anterior</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DashboardCarrinhos({ data, formatMoney }) {
+  if (!data) return <div className="text-center py-20 text-gray-400">Buscando leads em carrinhos abandonados...</div>;
+
+  // Função para gerar link do WhatsApp
+  const getWaLink = (tel, nome) => {
+    const limpo = tel.replace(/\D/g, "");
+    const msg = encodeURIComponent(`Olá ${nome.split(" ")[0]}, tudo bem? Vimos que você deixou alguns itens no carrinho da Via do Terno e preparamos uma condição especial para você finalizar sua compra!`);
+    return `https://wa.me/55${limpo}?text=${msg}`;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-r-2xl mb-8">
+        <div className="flex items-center gap-3">
+          <Award className="text-orange-600" />
+          <div>
+            <h3 className="font-bold text-orange-800">Recuperação Ativa</h3>
+            <p className="text-orange-700 text-sm">Estes clientes chegaram até o checkout mas não finalizaram. Entre em contato para fechar a venda!</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {data.carrinhos.map((c, i) => (
+          <div key={i} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition-shadow">
+            <div className="p-6 flex-1">
+              <div className="flex justify-between items-start mb-4">
+                <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-bold uppercase">{c.data}</span>
+                <span className="bg-orange-100 text-orange-600 px-2 py-1 rounded-lg text-xs font-black">{c.total_itens} item(ns)</span>
+              </div>
+
+              <h3 className="font-black text-gray-800 text-lg mb-1 uppercase truncate">{c.nome}</h3>
+              <p className="text-gray-400 text-sm mb-4 truncate">{c.email}</p>
+
+              <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                {c.produtos.map((p, idx) => (
+                  <img key={idx} src={p.img} alt={p.nome} className="h-12 w-12 rounded-lg object-cover border border-gray-50" title={p.nome} />
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 bg-gray-50 flex gap-2">
+              <a
+                href={getWaLink(c.telefone, c.nome)}
+                target="_blank"
+                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-center py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+              >
+                <RefreshCw size={16} /> WhatsApp
+              </a>
+              <a
+                href={c.url_checkout}
+                target="_blank"
+                className="flex-1 bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 text-center py-3 rounded-xl text-sm font-bold transition-colors"
+              >
+                Checkout
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {data.carrinhos.length === 0 && (
+        <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200">
+          <p className="text-gray-400">Nenhum lead encontrado nos carrinhos dos últimos 7 dias.</p>
         </div>
       )}
     </div>
