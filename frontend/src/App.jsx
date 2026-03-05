@@ -1,9 +1,27 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
-import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut, MapPin, Shirt, UserX } from 'lucide-react';
+import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut, MapPin, Shirt } from 'lucide-react';
+import { ComposableMap, Geographies, Geography, Marker } from "react-simple-maps";
+import { Users, Map as MapIcon, RefreshCcw } from "lucide-react";
+
+// URL oficial do GeoJSON do Brasil
+const geoUrl = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson";
+
+// Coordenadas aproximadas do centro de cada Estado para colocar as bolhas
+const COORDENADAS_ESTADOS = {
+  AC: [-70.5, -9.0], AL: [-36.6, -9.5], AP: [-52.0, 1.4], AM: [-64.6, -4.3],
+  BA: [-41.7, -12.9], CE: [-39.3, -5.0], DF: [-47.8, -15.7], ES: [-40.3, -19.1],
+  GO: [-49.2, -15.8], MA: [-45.2, -4.9], MT: [-56.0, -12.6], MS: [-54.6, -20.3],
+  MG: [-44.2, -18.5], PA: [-52.9, -3.2], PB: [-36.1, -7.1], PR: [-51.6, -24.5],
+  PE: [-37.9, -8.3], PI: [-42.7, -7.7], RJ: [-43.1, -22.9], RN: [-36.6, -5.7],
+  RS: [-53.2, -29.7], RO: [-62.9, -10.8], RR: [-61.3, 2.7], SC: [-50.2, -27.2],
+  SP: [-48.0, -22.5], SE: [-37.3, -10.5], TO: [-48.3, -10.1]
+};
 
 function App() {
+  const [dataDemografia, setDataDemografia] = useState(null);
+
   // --- ESTADO DE AUTENTICAÇÃO ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -11,14 +29,9 @@ function App() {
   // --- ESTADOS DO DASHBOARD ---
   const [data, setData] = useState(null);
   const [dataMesAtual, setDataMesAtual] = useState(null);
+  const [dataCarrinhos, setDataCarrinhos] = useState(null);
 
-  // --- NOVOS ESTADOS SEPARADOS (AVANÇADO) ---
-  const [dataGraficosAvancados, setDataGraficosAvancados] = useState(null);
-  const [dataChurn, setDataChurn] = useState(null);
-
-  const [loadingGraficos, setLoadingGraficos] = useState(false);
-  const [loadingChurn, setLoadingChurn] = useState(false);
-  const [loading, setLoading] = useState(true); // Loading geral (Login/Resumo)
+  const [loading, setLoading] = useState(true);
 
   // --- FILTROS ---
   const [ano, setAno] = useState(2026);
@@ -32,28 +45,19 @@ function App() {
 
   // --- DICIONÁRIO DE METAS POR MÊS/ANO ---
   const [metasMensais, setMetasMensais] = useState({
-    "1-2026": 50000, // Janeiro 2026 = 50 mil
-    "2-2026": 60000, // Fevereiro 2026 = 60 mil
-    "3-2026": 70000  // Março 2026 = 70 mil
+    "1-2026": 50000, 
+    "2-2026": 60000, 
+    "3-2026": 70000  
   });
 
-  // Descobre qual é a meta do mês que o usuário está olhando agora
-  // (Se ele for para um mês que não tem meta definida, assume 60000 como padrão)
   const metaMensalAtiva = metasMensais[`${mesSelecionado}-${anoSelecionado}`] || 60000;
 
-  // Função para salvar se você digitar um valor novo lá na caixinha do painel
   const handleAtualizarMeta = (novoValor) => {
     setMetasMensais(prev => ({
       ...prev,
       [`${mesSelecionado}-${anoSelecionado}`]: novoValor
     }));
   };
-
-
-
-  // --- NOVOS FILTROS DA ABA AVANÇADA ---
-  const [avancadoDias, setAvancadoDias] = useState(30); // Filtro dos Gráficos
-  const [avancadoMesesChurn, setAvancadoMesesChurn] = useState(3); // Filtro do Churn
 
   // Customizações de Data
   const [modoKpiCustomizado, setModoKpiCustomizado] = useState(false);
@@ -62,9 +66,6 @@ function App() {
   const [kpiDataFim, setKpiDataFim] = useState('');
   const [graficosDataInicio, setGraficosDataInicio] = useState('');
   const [graficosDataFim, setGraficosDataFim] = useState('');
-
-  // 1. Novo Estado
-  const [dataCarrinhos, setDataCarrinhos] = useState(null);
 
   useEffect(() => {
     const token = localStorage.getItem('via_token');
@@ -77,18 +78,15 @@ function App() {
   const fetchData = async () => {
     if (!isAuthenticated) return;
 
-    // Loading geral apenas se NÃO for a aba avançado (pois ela tem loadings próprios)
-    if (abaAtiva !== 'avancado') setLoading(true);
+    setLoading(true);
 
     try {
-      //const BASE_API = "https://api-viadoterno.onrender.com";
-      const BASE_API = "http://localhost:8000";
+      const BASE_API = "https://api-viadoterno.onrender.com";
+      //const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
-        // Montamos a URL base com os filtros padrões
         let url = `${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`;
 
-        // Se estiver em modo customizado e as datas estiverem preenchidas, adicionamos na URL
         if (modoKpiCustomizado && kpiDataInicio && kpiDataFim) {
           url += `&kpi_inicio=${kpiDataInicio}&kpi_fim=${kpiDataFim}`;
         }
@@ -105,37 +103,14 @@ function App() {
         setDataMesAtual(res.data);
         setLoading(false);
       }
-      else if (abaAtiva === 'avancado') {
-        // --- LÓGICA DE DUAS ROTAS PARALELAS ---
-
-        // 1. Chama os Gráficos (Rápido)
-        setLoadingGraficos(true);
-        axios.get(`${BASE_API}/api/dashboard/graficos-avancados?dias=${avancadoDias}`)
-          .then(res => {
-            setDataGraficosAvancados(res.data);
-            setLoadingGraficos(false);
-          })
-          .catch(err => {
-            console.error("Erro gráficos:", err);
-            setLoadingGraficos(false);
-          });
-
-        // 2. Chama o Churn (Lento/Auto-Repair)
-        setLoadingChurn(true);
-        axios.get(`${BASE_API}/api/dashboard/churn?meses=${avancadoMesesChurn}`)
-          .then(res => {
-            setDataChurn(res.data);
-            setLoadingChurn(false);
-          })
-          .catch(err => {
-            console.error("Erro churn:", err);
-            setLoadingChurn(false);
-          });
-      }
-      // 2. Atualize o fetchData (dentro do try)
       else if (abaAtiva === 'carrinhos') {
         const res = await axios.get(`${BASE_API}/api/dashboard/carrinhos-abandonados?dias=30`);
         setDataCarrinhos(res.data);
+        setLoading(false);
+      }
+      else if (abaAtiva === 'demografia') {
+        const res = await axios.get(`${BASE_API}/api/dashboard/clientes-demografia`);
+        setDataDemografia(res.data);
         setLoading(false);
       }
     } catch (err) {
@@ -145,8 +120,6 @@ function App() {
     }
   };
 
-  // --- USE EFFECT PRINCIPAL ---
-  // Aqui adicionamos 'avancadoDias' e 'avancadoMesesChurn' na lista
   useEffect(() => {
     if (isAuthenticated) {
       fetchData();
@@ -158,10 +131,8 @@ function App() {
     abaAtiva,
     metaMensalAtiva,
     isAuthenticated,
-    avancadoDias,
-    avancadoMesesChurn,
-    mesSelecionado, // <--- ADICIONAR AQUI
-    anoSelecionado  // <--- ADICIONAR AQUI
+    mesSelecionado,
+    anoSelecionado
   ]);
 
   const handleLogout = () => {
@@ -169,22 +140,8 @@ function App() {
     setIsAuthenticated(false);
     setData(null);
     setDataMesAtual(null);
-    setDataGraficosAvancados(null);
-    setDataChurn(null);
-  };
-
-  // Função para forçar atualização APENAS do Churn (Botão Sincronizar)
-  const syncChurnOnly = () => {
-    //const BASE_API = "https://api-viadoterno.onrender.com";
-    const BASE_API = "http://localhost:8000";
-
-    setLoadingChurn(true);
-    axios.get(`${BASE_API}/api/dashboard/churn?meses=${avancadoMesesChurn}`)
-      .then(res => {
-        setDataChurn(res.data);
-        setLoadingChurn(false);
-      })
-      .catch(err => setLoadingChurn(false));
+    setDataCarrinhos(null);
+    setDataDemografia(null);
   };
 
   if (authLoading) return null;
@@ -201,9 +158,6 @@ function App() {
   const formatarPeriodo = (dias, dataInicio) => { if (!dataInicio) return `${dias} dias`; return "Período"; };
   const obterLabelPeriodo = (dias, dataInicio) => { if (dataInicio) return "Customizado"; return `${dias} dias`; };
   const aplicarPeriodoKpiCustomizado = () => {
-    // Apenas chamamos o fetchData novamente.
-    // Como os estados de DataInicio e DataFim já estão atualizados,
-    // o fetchData vai montar a URL corretamente (passo 1 acima).
     fetchData();
   };
   const aplicarPeriodoGraficosCustomizado = () => {
@@ -214,8 +168,8 @@ function App() {
 
   return (
     <div className="relative min-h-screen bg-gray-50 text-gray-800 p-4 md:p-8">
-      {/* Loading Geral (Apenas para Analítico e Mês Atual) */}
-      {loading && abaAtiva !== 'avancado' && (
+      {/* Loading Geral */}
+      {loading && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/95 backdrop-blur-sm transition-all">
           <img
             src="https://viadoterno.cdn.magazord.com.br/img/2026/02/logo/3331/logo-via-do-terno.png?_gl=1*2r1ugl*_ga*MTA1MzYyMDcwOC4xNzYwNzA5OTQ0*_ga_4JXK3QVJ6X*czE3NzAyMDQ3NTckbzI5NiRnMSR0MTc3MDIxMDQzMyRqMjYkbDAkaDA."
@@ -259,13 +213,13 @@ function App() {
             Vendas Por mês
             {abaAtiva === 'mes-atual' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600"></div>}
           </button>
-          <button onClick={() => setAbaAtiva('avancado')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'avancado' ? 'text-purple-600' : 'text-gray-400'}`}>
-            Estratégico & Churn
-            {abaAtiva === 'avancado' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>}
-          </button>
           <button onClick={() => setAbaAtiva('carrinhos')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'carrinhos' ? 'text-orange-600' : 'text-gray-400'}`}>
             Recuperação de Carrinho
             {abaAtiva === 'carrinhos' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-orange-600"></div>}
+          </button>
+          <button onClick={() => setAbaAtiva('demografia')} className={`pb-4 px-6 font-bold text-sm transition-all whitespace-nowrap relative ${abaAtiva === 'demografia' ? 'text-blue-600' : 'text-gray-400'}`}>
+            Público & Demografia
+            {abaAtiva === 'demografia' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"></div>}
           </button>
         </div>
 
@@ -291,11 +245,8 @@ function App() {
           <DashboardMesAtual
             data={dataMesAtual}
             formatMoney={formatMoney}
-
-            // Enviamos a meta ativa e a função nova:
             metaMensal={metaMensalAtiva}
             setMetaMensal={handleAtualizarMeta}
-
             mesSelecionado={mesSelecionado}
             setMesSelecionado={setMesSelecionado}
             anoSelecionado={anoSelecionado}
@@ -303,145 +254,15 @@ function App() {
           />
         )}
 
-        {/* NOVA TELA AVANÇADA COM PROPS ATUALIZADAS */}
-        {abaAtiva === 'avancado' && (
-          <DashboardAvancado
-            dataGraficos={dataGraficosAvancados}
-            dataChurn={dataChurn}
-            formatMoney={formatMoney}
-
-            dias={avancadoDias}
-            setDias={setAvancadoDias}
-            loadingGraficos={loadingGraficos}
-
-            mesesChurn={avancadoMesesChurn}
-            setMesesChurn={setAvancadoMesesChurn}
-            loadingChurn={loadingChurn}
-
-            onSyncChurn={syncChurnOnly}
-          />
-        )}
         {abaAtiva === 'carrinhos' && (
           <DashboardCarrinhos data={dataCarrinhos} formatMoney={formatMoney} />
         )}
-      </div>
-    </div>
-  );
-}
 
-// === COMPONENTE: DASHBOARD AVANÇADO ATUALIZADO ===
-function DashboardAvancado({
-  dataGraficos, dataChurn, formatMoney,
-  dias, setDias, loadingGraficos,
-  mesesChurn, setMesesChurn, loadingChurn,
-  onSyncChurn
-}) {
-
-  return (
-    <>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-
-        {/* --- COLUNA ESQUERDA: GRÁFICOS --- */}
-        <div className="lg:col-span-2">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-black text-gray-800">Análise Geográfica e Produtos</h2>
-            <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-xl border border-gray-200 shadow-sm">
-              <Filter size={18} className="text-blue-600" />
-              <select value={dias} onChange={(e) => setDias(Number(e.target.value))} className="bg-transparent font-bold text-blue-700 outline-none cursor-pointer">
-                <option value={7}>Últimos 7 dias</option>
-                <option value={30}>Últimos 30 dias</option>
-                <option value={90}>Últimos 3 meses</option>
-                <option value={180}>Últimos 6 meses</option>
-              </select>
-            </div>
-          </div>
-
-          {loadingGraficos ? (
-            <div className="bg-white p-12 rounded-3xl text-center text-gray-400 animate-pulse border border-gray-100 shadow-sm">
-              <Loader2 className="animate-spin h-8 w-8 mx-auto mb-2 text-blue-400" />
-              Carregando gráficos...
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Gráfico Estados */}
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-blue-600"><MapPin size={20} /> Vendas por Estado</h3>
-                {dataGraficos?.geografico?.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={dataGraficos.geografico} layout="vertical"><XAxis type="number" hide /><YAxis dataKey="name" type="category" width={30} tick={{ fontWeight: 'bold' }} /><Tooltip formatter={(v) => formatMoney(v)} /><Bar dataKey="valor" fill="#3b82f6" radius={[0, 4, 4, 0]} /></BarChart>
-                  </ResponsiveContainer>
-                ) : <p className="text-gray-400 text-center py-10">Sem dados neste período.</p>}
-              </div>
-              {/* Gráfico Produtos */}
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-purple-600"><Shirt size={20} /> Top Variações</h3>
-                <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar">
-                  {dataGraficos?.produtos_variacao?.length > 0 ? dataGraficos.produtos_variacao.map((p, i) => (
-                    <div key={i} className="flex justify-between text-sm border-b border-gray-50 pb-2">
-                      <span className="font-bold text-gray-700 truncate w-2/3">{p.name}</span>
-                      <span className="font-black text-purple-600">{p.qtd} un</span>
-                    </div>
-                  )) : <p className="text-gray-400 text-center py-10">Sem dados neste período.</p>}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* --- SEÇÃO CHURN (Separada) --- */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-red-100 mt-8">
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
-          <div>
-            <h3 className="font-bold text-lg flex items-center gap-2 text-red-600"><UserX size={22} /> Clientes em Risco</h3>
-            <p className="text-sm text-gray-500">Clientes que não compram há mais de {mesesChurn} meses.</p>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={onSyncChurn} disabled={loadingChurn} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors" title="Forçar busca de clientes antigos">
-              <RefreshCw size={20} className={loadingChurn ? "animate-spin" : ""} />
-            </button>
-            <div className="flex items-center gap-2 bg-red-50 px-3 py-2 rounded-lg border border-red-100">
-              <span className="text-xs font-bold text-red-400 uppercase">Considerar Inativo:</span>
-              <select value={mesesChurn} onChange={(e) => setMesesChurn(Number(e.target.value))} className="bg-transparent font-bold text-red-600 outline-none text-sm cursor-pointer">
-                <option value={1}>+1 Mês</option>
-                <option value={2}>+2 Meses</option>
-                <option value={3}>+3 Meses</option>
-                <option value={6}>+6 Meses</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {loadingChurn ? (
-          <div className="text-center py-12">
-            <Loader2 className="animate-spin h-8 w-8 text-red-400 mx-auto mb-2" />
-            <p className="text-gray-400 text-sm">Analisando histórico e recuperando clientes antigos...</p>
-            <p className="text-xs text-gray-300 mt-1">Isso pode levar alguns segundos.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-red-50/50 text-red-400 text-xs uppercase font-bold">
-                <tr><th className="px-4 py-3 text-left">Cliente</th><th className="px-4 py-3 text-left">Última Compra</th><th className="px-4 py-3 text-left">Tempo Inativo</th><th className="px-4 py-3 text-right">Ação</th></tr>
-              </thead>
-              <tbody>
-                {dataChurn?.churn?.map((c, i) => (
-                  <tr key={i} className="border-b border-gray-50 hover:bg-red-50 transition-colors">
-                    <td className="px-4 py-3"><p className="font-bold text-gray-800 text-sm">{c.nome}</p><p className="text-xs text-gray-400">{c.email}</p></td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{c.data_formatada}</td>
-                    <td className="px-4 py-3"><span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">{c.dias_inativo} dias</span></td>
-                    <td className="px-4 py-3 text-right"><a href={`mailto:${c.email}`} className="text-blue-600 font-bold text-xs hover:underline">Email</a></td>
-                  </tr>
-                ))}
-                {(!dataChurn?.churn || dataChurn.churn.length === 0) && (
-                  <tr><td colSpan="4" className="text-center py-8 text-gray-400">Nenhum cliente encontrado com estes critérios ainda.<br /><span className="text-xs">Clique no botão de atualizar para buscar mais clientes antigos.</span></td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+        {abaAtiva === 'demografia' && (
+          <DashboardDemografia data={dataDemografia} />
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -458,11 +279,8 @@ function LoginPage({ onLoginSuccess }) {
     setError('');
 
     try {
-      // AJUSTE SEU IP AQUI TBM
-      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      await axios.post('http://localhost:8000/api/login', { username, password });
-
-      // Se deu certo:
+      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      //await axios.post('http://localhost:8000/api/login', { username, password });
       localStorage.setItem('via_token', 'logado_com_sucesso');
       onLoginSuccess();
     } catch (err) {
@@ -530,8 +348,6 @@ function LoginPage({ onLoginSuccess }) {
     </div>
   );
 }
-
-// ... MANTENHA AQUI EMBAIXO OS OUTROS COMPONENTES: DashboardAnalitico, DashboardMesAtual, KpiCard ...
 
 // === COMPONENTE: Dashboard Analítico ===
 function DashboardAnalitico({
@@ -841,12 +657,7 @@ function DashboardAnalitico({
   );
 }
 
-// === COMPONENTE: Dashboard Mês Atual (CORRIGIDO) ===
-// Não esqueça de importar o useState se ele estiver em um arquivo separado
-// import React, { useState } from 'react';
-// import { DollarSign, ShoppingBag, TrendingUp, Calendar, Award, Tag } from 'lucide-react'; // Ajuste os ícones conforme os seus imports
-// ... e os imports do Recharts (BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer)
-
+// === COMPONENTE: Dashboard Mês Atual ===
 function DashboardMesAtual({
   data,
   formatMoney,
@@ -863,8 +674,6 @@ function DashboardMesAtual({
 
   const { resumo, graficos, pedidos_recentes } = data;
 
-  // --- ESCUDO DE PROTEÇÃO CONTRA TELA BRANCA ---
-  // Se o dado não existir, ele converte para 0 automaticamente
   const faturamentoAtual = Number(resumo?.total_faturamento) || 0;
   const faturamentoAnterior = Number(resumo?.faturamento_anterior) || 0;
   const crescFaturamento = Number(resumo?.cresc_faturamento) || 0;
@@ -881,7 +690,6 @@ function DashboardMesAtual({
   const diasRestantes = Number(resumo?.dias_restantes) || 0;
   const diasTotais = diasDecorridos + diasRestantes;
 
-  // --- CÁLCULOS ---
   const mediaDiaCalculada = diasDecorridos > 0 ? faturamentoAtual / diasDecorridos : 0;
   const projecaoCalculada = mediaDiaCalculada * diasTotais;
   const percentualProgresso = metaMensal > 0 ? (faturamentoAtual / metaMensal) * 100 : 0;
@@ -899,13 +707,11 @@ function DashboardMesAtual({
 
   return (
     <>
-      {/* HEADER DO MÊS COM FILTROS */}
       <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 p-8 rounded-3xl shadow-lg mb-8 text-white">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h2 className="text-3xl font-black mb-3">Performance Mensal</h2>
 
-            {/* SELETORES DE MÊS E ANO */}
             <div className="flex items-center gap-3">
               <select
                 value={mesSelecionado}
@@ -954,7 +760,6 @@ function DashboardMesAtual({
         </div>
       </div>
 
-      {/* PROGRESS BAR E KPIs */}
       <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 mb-8">
         <div className="flex justify-between items-end mb-4">
           <div>
@@ -996,10 +801,7 @@ function DashboardMesAtual({
         </div>
       </div>
 
-      {/* OS 3 CARDS AVANÇADOS COM PORCENTAGEM */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-
-        {/* CARD 1: Faturamento */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
           <div className="flex justify-between items-start mb-2">
             <div>
@@ -1018,7 +820,6 @@ function DashboardMesAtual({
           </div>
         </div>
 
-        {/* CARD 2: Pedidos */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
           <div className="flex justify-between items-start mb-2">
             <div>
@@ -1037,7 +838,6 @@ function DashboardMesAtual({
           </div>
         </div>
 
-        {/* CARD 3: Ticket Médio */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative overflow-hidden">
           <div className="flex justify-between items-start mb-2">
             <div>
@@ -1057,7 +857,6 @@ function DashboardMesAtual({
         </div>
       </div>
 
-      {/* RESTANTE DOS GRÁFICOS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 lg:col-span-2">
           <h3 className="font-bold text-lg mb-6 flex items-center gap-2 text-emerald-600">Vendas por Dia do Mês</h3>
@@ -1180,6 +979,7 @@ function DashboardMesAtual({
     </>
   );
 }
+
 // === COMPONENTE: KPI Card ===
 function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
   const styles = {
@@ -1202,7 +1002,6 @@ function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
         <div className={`p-4 rounded-2xl ${style.icon}`}>{icon}</div>
       </div>
 
-      {/* Indicador de Crescimento */}
       {crescimento !== undefined && (
         <div className="flex items-center gap-2 mt-2">
           {isPositive && (
@@ -1240,11 +1039,11 @@ function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
 function DashboardCarrinhos({ data, formatMoney }) {
   if (!data) return <div className="text-center py-20 text-gray-400">Buscando leads em carrinhos abandonados...</div>;
 
-  // Função para gerar link do WhatsApp
   const getWaLink = (tel, nome) => {
     const limpo = tel.replace(/\D/g, "");
-    const msg = encodeURIComponent(`Olá ${nome.split(" ")[0]}, tudo bem? Vimos que você deixou alguns itens no carrinho da Via do Terno e preparamos uma condição especial para você finalizar sua compra!`);
-    return `https://wa.me/55${limpo}?text=${msg}`;
+    const msg = `Olá ${nome.split(" ")[0]}, tudo bem? Vimos que você deixou alguns itens no carrinho da Via do Terno e preparamos uma condição especial para você finalizar sua compra!\n\nUse o cupom *FRETEGRATIS* para conseguir 15% OFF e frete grátis!`
+    
+    return `https://wa.me/55${limpo}?text=${encodeURIComponent(msg)}`;
   };
 
   return (
@@ -1303,6 +1102,135 @@ function DashboardCarrinhos({ data, formatMoney }) {
           <p className="text-gray-400">Nenhum lead encontrado nos carrinhos dos últimos 7 dias.</p>
         </div>
       )}
+    </div>
+  );
+}
+
+function DashboardDemografia({ data }) {
+  const [estadoSelecionado, setEstadoSelecionado] = useState(null);
+  const [faixaSelecionada, setFaixaSelecionada] = useState(null);
+
+  if (!data || !data.clientes) return <div className="text-center py-20 text-gray-500">Carregando mapa...</div>;
+
+  const clientes = data.clientes;
+
+  const clientesParaBarras = clientes.filter(c => estadoSelecionado ? c.estado === estadoSelecionado : true);
+  const contagemFaixas = clientesParaBarras.reduce((acc, c) => {
+    acc[c.faixa] = (acc[c.faixa] || 0) + 1;
+    return acc;
+  }, {});
+
+  const dataBarras = Object.keys(contagemFaixas)
+    .map(faixa => ({ faixa, quantidade: contagemFaixas[faixa] }))
+    .sort((a, b) => a.faixa.localeCompare(b.faixa));
+
+  const clientesParaMapa = clientes.filter(c => faixaSelecionada ? c.faixa === faixaSelecionada : true);
+  const contagemEstados = clientesParaMapa.reduce((acc, c) => {
+    acc[c.estado] = (acc[c.estado] || 0) + 1;
+    return acc;
+  }, {});
+
+  const limparFiltros = () => {
+    setEstadoSelecionado(null);
+    setFaixaSelecionada(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-blue-700 to-blue-500 p-6 rounded-3xl shadow-lg text-white flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-black flex items-center gap-3">
+            <Users size={28} /> Demografia de Clientes
+          </h2>
+          <p className="text-blue-100 text-sm mt-1">
+            Clique em um Estado ou em uma Faixa Etária para cruzar os dados de onde seu público está.
+          </p>
+        </div>
+        {(estadoSelecionado || faixaSelecionada) && (
+          <button onClick={limparFiltros} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-xl transition-colors font-bold text-sm">
+            <RefreshCcw size={16} /> Limpar Filtros
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+          <h3 className="font-bold text-lg mb-4 text-gray-800 flex items-center gap-2">
+            <MapIcon className="text-orange-500" />
+            Concentração de Público
+            {faixaSelecionada && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-lg ml-2">Filtrado: {faixaSelecionada}</span>}
+          </h3>
+          <div className="flex-1 bg-blue-50/30 rounded-2xl relative overflow-hidden" style={{ minHeight: '400px' }}>
+            <ComposableMap projection="geoMercator" projectionConfig={{ scale: 750, center: [-54, -15] }} style={{ width: "100%", height: "100%" }}>
+              <Geographies geography={geoUrl}>
+                {({ geographies }) =>
+                  geographies.map((geo) => (
+                    <Geography key={geo.rsmKey} geography={geo} fill="#f1f5f9" stroke="#cbd5e1" style={{ default: { outline: 'none' }, hover: { fill: '#e2e8f0', outline: 'none' }, pressed: { outline: 'none' } }} />
+                  ))
+                }
+              </Geographies>
+
+              {Object.entries(COORDENADAS_ESTADOS).map(([uf, coords]) => {
+                const qtd = contagemEstados[uf] || 0;
+                if (qtd === 0) return null;
+
+                const isSelected = uf === estadoSelecionado;
+                const isFaded = estadoSelecionado && !isSelected;
+                const size = Math.min(Math.max(6, Math.sqrt(qtd) * 4), 30);
+
+                return (
+                  <Marker key={uf} coordinates={coords} onClick={() => setEstadoSelecionado(isSelected ? null : uf)} style={{ cursor: "pointer" }}>
+                    <circle r={size} fill={isSelected ? "#ea580c" : "#f97316"} fillOpacity={isFaded ? 0.3 : 0.8} stroke="#ffffff" strokeWidth={2} className="transition-all duration-300" />
+                    <text textAnchor="middle" y={isSelected ? -size - 4 : 4} style={{ fontSize: isSelected ? "12px" : "10px", fill: isSelected ? "#c2410c" : "#fff", fontWeight: "900", pointerEvents: "none" }} className="transition-all duration-300">
+                      {uf}
+                    </text>
+                  </Marker>
+                );
+              })}
+            </ComposableMap>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+          <h3 className="font-bold text-lg mb-6 text-gray-800 flex items-center gap-2">
+            <Users className="text-blue-500" />
+            Distribuição por Idade
+            {estadoSelecionado && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-lg ml-2">Filtrado: Estado de {estadoSelecionado}</span>}
+          </h3>
+          <div className="flex-1" style={{ minHeight: '400px' }}>
+            {dataBarras.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dataBarras} margin={{ top: 20, right: 30, left: -20, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="faixa" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 'bold', fill: '#64748b' }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                  <Tooltip
+                    cursor={{ fill: 'transparent' }}
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <Bar dataKey="quantidade" name="Clientes" radius={[6, 6, 0, 0]} onClick={(data) => setFaixaSelecionada(data.faixa === faixaSelecionada ? null : data.faixa)}>
+                    {dataBarras.map((entry, index) => {
+                      const isSelected = entry.faixa === faixaSelecionada;
+                      const isFaded = faixaSelecionada && !isSelected;
+                      return (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={isSelected ? "#2563eb" : "#3b82f6"}
+                          fillOpacity={isFaded ? 0.3 : 1}
+                          style={{ cursor: 'pointer', transition: 'all 0.3s' }}
+                        />
+                      );
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-gray-400">Nenhum dado encontrado para este filtro.</div>
+            )}
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }

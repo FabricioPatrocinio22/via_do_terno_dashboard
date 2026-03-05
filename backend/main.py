@@ -30,7 +30,7 @@ def get_headers():
     token_b64 = base64.b64encode(credenciais.encode()).decode()
     return {"Authorization": f"Basic {token_b64}", "Content-Type": "application/json"}
 
-# --- GESTÃO DE CACHE (A SOLUÇÃO DO TRAVAMENTO) ---
+# --- GESTÃO DE CACHE ---
 def carregar_cache():
     if os.path.exists(CACHE_FILE):
         try:
@@ -45,7 +45,7 @@ def salvar_cache(cache):
     except Exception as e:
         print(f"Erro ao salvar cache: {e}")
 
-# --- GESTÃO DE USUÁRIOS ---
+# --- GESTÃO DE UTILIZADORES ---
 def carregar_usuarios():
     if not os.path.exists(USERS_FILE):
         padrao = {"admin": "via123"}
@@ -67,222 +67,9 @@ def login(data: LoginData):
         return {"status": "success", "token": "logado_com_sucesso"}
     raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
 
-# --- FUNÇÕES INTELIGENTES (SMART FETCH) ---
-
-def buscar_detalhes_paralelo_smart(lista_resumo, cache_existente):
-    """
-    Só busca na API os pedidos que NÃO estão no cache.
-    Isso economiza milhares de requisições e evita travamentos.
-    """
-    pedidos_para_baixar = []
-    
-    # 1. Filtra: Quem eu já tenho?
-    for p in lista_resumo:
-        pid = str(p.get('id') or p.get('codigo'))
-        if pid not in cache_existente:
-            pedidos_para_baixar.append(p)
-            
-    if not pedidos_para_baixar:
-        print("⚡ Todos os pedidos já estão no cache! Processamento instantâneo.")
-        return []
-
-    print(f"📥 Baixando {len(pedidos_para_baixar)} novos pedidos (os outros {len(lista_resumo) - len(pedidos_para_baixar)} já temos)...")
-    
-    novos_detalhes = []
-    headers = get_headers()
-
-    def fetch_one(pedido_resumo):
-        pid = str(pedido_resumo.get('id') or pedido_resumo.get('codigo'))
-        try:
-            res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
-            if res.status_code == 200:
-                return pid, res.json().get('data', {})
-        except: pass
-        return pid, None
-
-    # Usa 15 conexões para baixar o que falta
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        results = executor.map(fetch_one, pedidos_para_baixar)
-        
-        for pid, dados in results:
-            if dados:
-                novos_detalhes.append((pid, dados))
-            
-    return novos_detalhes
-
-def buscar_lista_periodo(dias_atras):
-    headers = get_headers()
-    lista_final = []
-    pagina = 1
-    
-    # Filtro Otimizado na API
-    data_corte = get_now_br() - timedelta(days=dias_atras)
-    data_inicio_api = data_corte.strftime("%Y-%m-%d")
-    
-    print(f"📅 Buscando lista de pedidos desde: {data_inicio_api}")
-
-    while True:
-        try:
-            params = {
-                "limit": 100, # Aumentei para 100 para ser mais rápido
-                "page": pagina, 
-                "order": "dataHora", "orderDirection": "desc",
-                "dataInicio": data_inicio_api
-            }
-            res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, params=params, timeout=15)
-            items = res.json().get('data', {}).get('items', [])
-            if not items: break
-
-            lista_final.extend(items)
-            pagina += 1
-            if pagina > 200: break 
-        except: break
-            
-    print(f"✅ Lista encontrada: {len(lista_final)} pedidos.")
-    return lista_final
 
 # ==========================================
-# ROTA 1: GRÁFICOS AVANÇADOS (COM SALVAMENTO AUTOMÁTICO)
-# ==========================================
-@app.get("/api/dashboard/graficos-avancados")
-def get_graficos_avancados(dias: int = 30):
-    cache = carregar_cache()
-    
-    # 1. Busca lista atualizada da API
-    lista_resumo = buscar_lista_periodo(dias)
-    
-    # --- LÓGICA DE DOWNLOAD INTELIGENTE COM SALVAMENTO ---
-    pedidos_para_baixar = []
-    ids_no_periodo = []
-
-    # Separa o que já temos do que falta
-    for p in lista_resumo:
-        pid = str(p.get('id') or p.get('codigo'))
-        ids_no_periodo.append(pid)
-        if pid not in cache:
-            pedidos_para_baixar.append(p)
-    
-    # Se tiver coisa nova, baixa em lotes
-    if pedidos_para_baixar:
-        print(f"📥 Baixando {len(pedidos_para_baixar)} novos pedidos...")
-        headers = get_headers()
-        
-        def fetch_one(pedido_resumo):
-            pid = str(pedido_resumo.get('id') or pedido_resumo.get('codigo'))
-            try:
-                res = requests.get(f"{BASE_URL}/v2/site/pedido/{pid}", headers=headers, timeout=20)
-                if res.status_code == 200:
-                    return pid, res.json().get('data', {})
-            except: pass
-            return pid, None
-
-        # Processa e SALVA A CADA 50 PEDIDOS
-        contador = 0
-        with ThreadPoolExecutor(max_workers=10) as executor: # Reduzi para 10 para ser mais estável
-            results = executor.map(fetch_one, pedidos_para_baixar)
-            
-            for pid, dados in results:
-                if dados:
-                    cache[pid] = dados
-                    contador += 1
-                
-                # O PULO DO GATO: Salva a cada 50 pedidos baixados
-                if contador % 50 == 0:
-                    print(f"💾 Salvando progresso parcial... ({contador}/{len(pedidos_para_baixar)})")
-                    salvar_cache(cache)
-        
-        # Salva o finalzinho que sobrou
-        salvar_cache(cache)
-        print("✅ Download concluído e salvo!")
-    else:
-        print("⚡ Todos os pedidos já estão no cache!")
-
-    # --- GERAÇÃO DOS GRÁFICOS (IGUAL ANTES) ---
-    vendas_por_estado = defaultdict(float)
-    produtos_tamanho_cor = defaultdict(int)
-
-    for pid in ids_no_periodo:
-        detalhe = cache.get(pid)
-        if not detalhe: continue
-
-        situacao = detalhe.get('pedidoSituacaoDescricao', '').lower()
-        if 'cancelado' in situacao: continue
-
-        estado = detalhe.get('estadoSigla', 'N/A')
-        if estado and len(estado) == 2:
-            vendas_por_estado[estado] += float(detalhe.get('valorTotalFinal', 0))
-
-        itens = detalhe.get('arrayPedidoRastreio', [])
-        for rastreio in itens:
-            for item in rastreio.get('pedidoItem', []):
-                nome_base = item.get('produtoNome', 'Item')
-                variacao = item.get('produtoDerivacaoNome', '') 
-                chave = f"{nome_base} [{variacao}]" if variacao else nome_base
-                produtos_tamanho_cor[chave] += float(item.get('quantidade', 1))
-
-    return {
-        "geografico": sorted([{"name": k, "valor": v} for k, v in vendas_por_estado.items()], key=lambda x: x["valor"], reverse=True)[:10],
-        "produtos_variacao": sorted([{"name": k, "qtd": v} for k, v in produtos_tamanho_cor.items()], key=lambda x: x["qtd"], reverse=True)[:10]
-    }
-
-# ==========================================
-# ROTA 2: CHURN (COM SMART CACHE + FILTRO)
-# ==========================================
-@app.get("/api/dashboard/churn")
-def get_churn_clientes(meses: int = 3):
-    cache = carregar_cache()
-    
-    # Busca 6 meses de histórico
-    lista_resumo = buscar_lista_periodo(180) 
-    
-    # Baixa o que falta
-    novos = buscar_detalhes_paralelo_smart(lista_resumo, cache)
-    
-    if novos:
-        for pid, dados in novos:
-            cache[str(pid)] = dados
-        salvar_cache(cache)
-    
-    clientes_ultima_compra = {}
-    hoje = get_now_br()
-    dias_corte = meses * 30
-    
-    ids_no_periodo = [str(p.get('id') or p.get('codigo')) for p in lista_resumo]
-
-    for pid in ids_no_periodo:
-        detalhe = cache.get(pid)
-        if not detalhe: continue
-        
-        # Filtro de Status
-        if 'cancelado' in detalhe.get('pedidoSituacaoDescricao', '').lower(): continue
-
-        email = detalhe.get('pessoaEmail')
-        nome = detalhe.get('pessoaNome')
-        data_str = detalhe.get('dataHora')
-        
-        if email and data_str:
-            try:
-                dt_pedido = datetime.strptime(data_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(hours=3)
-                dias_inativo = (hoje - dt_pedido).days
-
-                if email not in clientes_ultima_compra or dias_inativo < clientes_ultima_compra[email]['dias_inativo']:
-                    clientes_ultima_compra[email] = {
-                        "nome": nome,
-                        "email": email,
-                        "data_formatada": dt_pedido.strftime("%d/%m/%Y"),
-                        "dias_inativo": dias_inativo
-                    }
-            except: continue
-
-    lista_churn = sorted(
-        [c for c in clientes_ultima_compra.values() if c['dias_inativo'] > dias_corte],
-        key=lambda x: x['dias_inativo'], reverse=True
-    )[:50]
-
-    return {"churn": lista_churn}
-
-# ==========================================
-# ROTA 3: MÊS ATUAL (MANTIDA DO SEU CÓDIGO)
+# ROTA: MÊS ATUAL 
 # ==========================================
 @app.get("/api/dashboard/mes-atual")
 def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = None):
@@ -304,7 +91,6 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
         ano_anterior = alvo_ano
 
     # Data marco zero: Dia 1º do mês ANTERIOR
-    # Ex: Quer março? Começa a buscar desde 1º de fevereiro.
     data_inicio_busca = datetime(ano_anterior, mes_anterior, 1)
     data_inicio_api = data_inicio_busca.strftime("%Y-%m-%d")
 
@@ -331,7 +117,6 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
     pedidos_anterior = 0
 
     while continuar:
-        # O PULO DO GATO: Tiramos o dataFim para não bugar a API.
         res = requests.get(f"{BASE_URL}/v2/site/pedido", headers=headers, 
                            params={"limit": 100, "page": pagina, "order": "dataHora", "orderDirection": "desc", 
                                    "dataInicio": data_inicio_api})
@@ -342,7 +127,7 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
         
         for p_resumo in items:
             try:
-                # Extrai a data blindada contra formatos quebrados da API
+                # Extrai a data blindada
                 data_str = p_resumo.get('dataHora', '')[:10]
                 dt_pedido = datetime.strptime(data_str, "%Y-%m-%d")
                 
@@ -351,7 +136,7 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
                     continuar = False
                     break
                 
-                # TRAVA MANUAL 2: Se o usuário escolheu um mês antigo, ignora os dias do futuro
+                # TRAVA MANUAL 2: Se escolheu um mês antigo, ignora os dias do futuro
                 if dt_pedido.date() > ultimo_dia_mes_date.date():
                     continue
 
@@ -361,10 +146,6 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
                 valor_total = float(p_resumo.get('valorTotal') or 0)
                 valor_frete = float(p_resumo.get('valorFrete') or 0)
                 valor = valor_total - valor_frete
-                
-                # ==========================================
-                # SEPARAÇÃO DE MESES
-                # ==========================================
                 
                 # ---> MÊS ATUAL
                 if dt_pedido.month == alvo_mes and dt_pedido.year == alvo_ano:
@@ -409,7 +190,7 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
                             "cliente": cliente_nome
                         })
 
-                # ---> MÊS ANTERIOR (Onde estava dando zero!)
+                # ---> MÊS ANTERIOR 
                 elif dt_pedido.month == mes_anterior and dt_pedido.year == ano_anterior:
                     faturamento_anterior += valor
                     pedidos_anterior += 1
@@ -450,7 +231,6 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
     nome_meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
     mes_ano_formatado = f"{nome_meses[alvo_mes - 1]}/{alvo_ano}"
 
-    # Cálculos de Ticket e Crescimento
     ticket_medio_atual = total_faturamento / total_pedidos if total_pedidos > 0 else 0
     ticket_medio_anterior = faturamento_anterior / pedidos_anterior if pedidos_anterior > 0 else 0
 
@@ -487,45 +267,35 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
         },
         "pedidos_recentes": sorted(pedidos_detalhados, key=lambda x: x['data'], reverse=True)[:20]
     }
+
 # ==========================================
-# ROTA 4: RESUMO GERAL (MANTIDA E OTIMIZADA)
+# ROTA: RESUMO GERAL 
 # ==========================================
 @app.get("/api/dashboard/resumo")
 def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int = 30, kpi_inicio: str = None, kpi_fim: str = None, graficos_inicio: str = None, graficos_fim: str = None):
-    cache = carregar_cache() # <--- Otimização
+    cache = carregar_cache() 
     headers = get_headers()
     
     ano_anterior = ano - 1
     agora = get_now_br()
     
-    # ==========================================
-    # 1. DEFINIÇÃO DAS DATAS DOS KPIs
-    # ==========================================
     if kpi_inicio and kpi_fim:
-        # Se vieram datas personalizadas da URL, usa elas
         data_limite_kpi = datetime.strptime(kpi_inicio, "%Y-%m-%d").date()
         data_fim_kpi_real = datetime.strptime(kpi_fim, "%Y-%m-%d").date()
         dias_diferenca = (data_fim_kpi_real - data_limite_kpi).days + 1
         data_limite_kpi_anterior = data_limite_kpi - timedelta(days=dias_diferenca)
     else:
-        # Se NÃO vieram datas, usa a lógica ORIGINAL
         data_limite_kpi = (agora - timedelta(days=dias_kpi)).date()
         data_fim_kpi_real = agora.date()
         data_limite_kpi_anterior = (agora - timedelta(days=dias_kpi * 2)).date()
 
-    # ==========================================
-    # 2. DEFINIÇÃO DAS DATAS DOS GRÁFICOS E PRODUTOS
-    # ==========================================
     if graficos_inicio and graficos_fim:
-        # Se vieram datas personalizadas, usa elas
         data_limite_graficos = datetime.strptime(graficos_inicio, "%Y-%m-%d").date()
         data_fim_graficos_real = datetime.strptime(graficos_fim, "%Y-%m-%d").date()
     else:
-        # Lógica ORIGINAL
         data_limite_graficos = (agora - timedelta(days=dias_graficos)).date()
         data_fim_graficos_real = agora.date()
     
-    # Variáveis Originais mantidas
     vendas_atual = {m: 0.0 for m in range(1, 13)}
     vendas_passado = {m: 0.0 for m in range(1, 13)}
     
@@ -546,17 +316,15 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
         if res.status_code != 200: break
         items = res.json().get('data', {}).get('items', [])
         
-        # Trava de segurança original
         if not items or pagina > 200: break 
 
         for p_resumo in items:
             dt_pedido_full = datetime.strptime(p_resumo.get('dataHora').split()[0], "%Y-%m-%d")
-            dt_pedido = dt_pedido_full.date() # Extrai apenas a data para ficar fácil de comparar
+            dt_pedido = dt_pedido_full.date() 
             situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
             
             if 'cancelado' in situacao or 'aguardando' in situacao: continue
 
-            # --- CÁLCULO DESCONTANDO O FRETE (Mantido) ---
             valor_total = float(p_resumo.get('valorTotal') or 0)
             valor_frete = float(p_resumo.get('valorFrete') or 0)
             valor = valor_total - valor_frete
@@ -568,7 +336,6 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
                 continuar = False
                 break
 
-            # --- FILTROS DOS KPIs COM SUPORTE A DATAS CUSTOMIZADAS ---
             if dt_pedido >= data_limite_kpi and dt_pedido <= data_fim_kpi_real:
                 faturamento_periodo += valor
                 pedidos_periodo += 1
@@ -576,10 +343,8 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
                 faturamento_periodo_anterior += valor
                 pedidos_periodo_anterior += 1
 
-            # --- FILTROS DE PRODUTOS/GRÁFICOS COM SUPORTE A DATAS CUSTOMIZADAS ---
             if dt_pedido >= data_limite_graficos and dt_pedido <= data_fim_graficos_real:
                 codigo_p = str(p_resumo.get('codigo'))
-                # OTIMIZAÇÃO: Tenta cache primeiro (Mantido)
                 if codigo_p not in cache:
                     try:
                         det = requests.get(f"{BASE_URL}/v2/site/pedido/{codigo_p}", headers=headers).json()
@@ -602,7 +367,6 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
     salvar_cache(cache)
 
-    # Processamento Final (Produtos) - Mantido igualzinho
     produtos_final = {}
     for d in analise_produtos:
         key = f"{d['nome']}|{d['codigo']}"
@@ -640,7 +404,7 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 
 
 # ==========================================
-# ROTA: CARRINHOS ABANDONADOS (COM LEAD)
+# ROTA: CARRINHOS ABANDONADOS
 # ==========================================
 @app.get("/api/dashboard/carrinhos-abandonados")
 def get_carrinhos_abandonados(dias: int = 7):
@@ -649,7 +413,6 @@ def get_carrinhos_abandonados(dias: int = 7):
     data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
     data_fim = hoje.strftime("%Y-%m-%d")
 
-    # 1. Busca a lista resumida
     res = requests.get(
         f"{BASE_URL}/v2/site/carrinho", 
         auth=(USUARIO, SENHA), 
@@ -667,15 +430,10 @@ def get_carrinhos_abandonados(dias: int = 7):
 
     itens_brutos = res.json().get('data', {}).get('items', [])
     
-    # ==========================================
-    # 💥 O FILTRO MÁGICO QUE REMOVE COMPRAS FINALIZADAS
-    # Só mantemos o carrinho se o campo "pedido" estiver vazio (None)
-    # ==========================================
     itens_resumo = [item for item in itens_brutos if not item.get('pedido')]
 
     leads_encontrados = []
 
-    # 2. Função para buscar o detalhe de cada carrinho (será usada em paralelo)
     def fetch_carrinho_detail(item):
         cid = item.get('id')
         try:
@@ -684,9 +442,7 @@ def get_carrinhos_abandonados(dias: int = 7):
                 dados = res_det.json().get('data', {}).get('carrinho', {})
                 pessoa = dados.get('pessoa', {})
                 
-                # Só retorna se tiver contato
                 if pessoa and (pessoa.get('email') or pessoa.get('contato_principal')):
-                    # Formata data
                     dt_str = dados.get('ultima_atualizacao', item.get('dataAtualizacao', ''))
                     try:
                         dt_obj = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S")
@@ -710,18 +466,72 @@ def get_carrinhos_abandonados(dias: int = 7):
         except: pass
         return None
 
-    # 3. Execução em paralelo para ser rápido
     with ThreadPoolExecutor(max_workers=10) as executor:
         results = list(executor.map(fetch_carrinho_detail, itens_resumo))
         leads_encontrados = [r for r in results if r is not None]
 
-    # --- ADICIONE ESTA LINHA ---
     leads_encontrados.sort(key=lambda x: x["id"], reverse=True)
 
     return {"carrinhos": leads_encontrados}
 
+# ==========================================
+# ROTA: DEMOGRAFIA
+# ==========================================
+@app.get("/api/dashboard/clientes-demografia")
+def get_clientes_demografia():
+    hoje = get_now_br()
+    clientes = []
+    
+    pagina = 1
+    while pagina <= 10:
+        res = requests.get(
+            f"{BASE_URL}/v2/site/pessoa", 
+            auth=(USUARIO, SENHA), 
+            params={"limit": 100, "page": pagina, "orderDirection": "desc"}
+        )
+        if res.status_code != 200: break
+        
+        items = res.json().get('data', {}).get('items', [])
+        if not items: break
+        
+        if isinstance(items, dict): items = [items]
+            
+        for p in items:
+            nascimento = p.get('dataNascimento')
+            enderecos = p.get('pessoaEndereco', [])
+            estado = None
+            
+            if enderecos and len(enderecos) > 0:
+                estado = enderecos[0].get('estadoSigla')
+            
+            faixa = "Não informada"
+            
+            if nascimento:
+                try:
+                    dt_nasc = datetime.strptime(nascimento[:10], "%Y-%m-%d")
+                    idade = hoje.year - dt_nasc.year - ((hoje.month, hoje.day) < (dt_nasc.month, dt_nasc.day))
+                    
+                    if idade >= 10 and idade <= 19: faixa = "10-19 anos"
+                    elif idade >= 20 and idade <= 29: faixa = "20-29 anos"
+                    elif idade >= 30 and idade <= 39: faixa = "30-39 anos"
+                    elif idade >= 40 and idade <= 49: faixa = "40-49 anos"
+                    elif idade >= 50 and idade <= 59: faixa = "50-59 anos"
+                    elif idade >= 60 and idade <= 69: faixa = "60-69 anos"
+                    elif idade >= 70 and idade <= 120: faixa = "70+ anos"
+                except:
+                    pass
+            
+            if estado:
+                clientes.append({
+                    "estado": estado,
+                    "faixa": faixa
+                })
+                
+        pagina += 1
+        
+    return {"clientes": clientes}
+
 if __name__ == "__main__":
     import uvicorn
-    # Usa porta 8000 para local, ou a que o ambiente pedir
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
