@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 load_dotenv()
 
@@ -20,6 +21,10 @@ SENHA = os.getenv("MAGAZORD_PASS")
 BASE_URL = os.getenv("MAGAZORD_URL")
 CACHE_FILE = "cache_pedidos.json"
 USERS_FILE = "users.json"
+CACHE_PESSOAS_FILE = "cache_pessoas.json" # <--- ADICIONE ESTA LINHA
+
+# Variável global que o React vai consultar a cada 1 segundo
+progresso_demografia = {"atual": 0, "total": 0, "mensagem": "Iniciando..."}
 
 # --- HELPER: TIMEZONE BRASIL (UTC-3) ---
 def get_now_br():
@@ -44,6 +49,21 @@ def salvar_cache(cache):
             json.dump(cache, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print(f"Erro ao salvar cache: {e}")
+
+# --- GESTÃO DE CACHE DE PESSOAS ---
+def carregar_cache_pessoas():
+    if os.path.exists(CACHE_PESSOAS_FILE):
+        try:
+            with open(CACHE_PESSOAS_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except: return {}
+    return {}
+
+def salvar_cache_pessoas(cache):
+    try:
+        with open(CACHE_PESSOAS_FILE, 'w', encoding='utf-8') as f: 
+            json.dump(cache, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Erro ao salvar cache de pessoas: {e}")
 
 # --- GESTÃO DE UTILIZADORES ---
 def carregar_usuarios():
@@ -475,61 +495,139 @@ def get_carrinhos_abandonados(dias: int = 7):
     return {"carrinhos": leads_encontrados}
 
 # ==========================================
-# ROTA: DEMOGRAFIA
+# ROTA: DEMOGRAFIA (COM AMOSTRAGEM E PROGRESSO)
 # ==========================================
 @app.get("/api/dashboard/clientes-demografia")
-def get_clientes_demografia():
-    hoje = get_now_br()
-    clientes = []
+def get_clientes_demografia(percentual: int = 25):
+    global progresso_demografia
+    progresso_demografia = {"atual": 0, "total": 0, "mensagem": "Calculando tamanho da base..."}
     
+    hoje = get_now_br()
+    cache_pessoas = carregar_cache_pessoas()
+    
+    data_inicio = "2000-01-01"
+    data_fim = hoje.strftime("%Y-%m-%d")
+    
+    # Fazemos apenas 1 pedido rápido para descobrir o TOTAL de clientes na loja
+    res_total = requests.get(f"{BASE_URL}/v2/site/pessoa", auth=(USUARIO, SENHA), params={"limit": 1, "page": 1, "orderDirection": "desc", "dataAtualizacaoInicio": data_inicio, "dataAtualizacaoFim": data_fim})
+    if res_total.status_code != 200: return {"clientes": []}
+    
+    total_magazord = res_total.json().get('data', {}).get('total', 0)
+    
+    # Calcula quantos clientes correspondem à percentagem escolhida
+    alvo_clientes = int(total_magazord * (percentual / 100.0))
+    if alvo_clientes == 0: alvo_clientes = 100 # Prevenção de erro
+    
+    progresso_demografia["total"] = alvo_clientes
+    progresso_demografia["mensagem"] = "Baixando lista de clientes..."
+    
+    pessoas_basicas = []
     pagina = 1
-    while pagina <= 10:
-        res = requests.get(
-            f"{BASE_URL}/v2/site/pessoa", 
-            auth=(USUARIO, SENHA), 
-            params={"limit": 100, "page": pagina, "orderDirection": "desc"}
-        )
+    continuar = True
+    
+    # FASE 1: Baixar a Lista Básica até atingir o Alvo
+    while continuar and len(pessoas_basicas) < alvo_clientes:
+        res = requests.get(f"{BASE_URL}/v2/site/pessoa", auth=(USUARIO, SENHA), params={"limit": 100, "page": pagina, "orderDirection": "desc", "dataAtualizacaoInicio": data_inicio, "dataAtualizacaoFim": data_fim})
         if res.status_code != 200: break
-        
-        items = res.json().get('data', {}).get('items', [])
+            
+        dados = res.json().get('data', {})
+        items = dados.get('items', [])
         if not items: break
         
         if isinstance(items, dict): items = [items]
             
         for p in items:
-            nascimento = p.get('dataNascimento')
-            enderecos = p.get('pessoaEndereco', [])
-            estado = None
-            
-            if enderecos and len(enderecos) > 0:
-                estado = enderecos[0].get('estadoSigla')
-            
-            faixa = "Não informada"
-            
-            if nascimento:
-                try:
-                    dt_nasc = datetime.strptime(nascimento[:10], "%Y-%m-%d")
-                    idade = hoje.year - dt_nasc.year - ((hoje.month, hoje.day) < (dt_nasc.month, dt_nasc.day))
-                    
-                    if idade >= 10 and idade <= 19: faixa = "10-19 anos"
-                    elif idade >= 20 and idade <= 29: faixa = "20-29 anos"
-                    elif idade >= 30 and idade <= 39: faixa = "30-39 anos"
-                    elif idade >= 40 and idade <= 49: faixa = "40-49 anos"
-                    elif idade >= 50 and idade <= 59: faixa = "50-59 anos"
-                    elif idade >= 60 and idade <= 69: faixa = "60-69 anos"
-                    elif idade >= 70 and idade <= 120: faixa = "70+ anos"
-                except:
-                    pass
-            
-            if estado:
-                clientes.append({
-                    "estado": estado,
-                    "faixa": faixa
-                })
+            if len(pessoas_basicas) < alvo_clientes:
+                pessoas_basicas.append(p)
                 
-        pagina += 1
+        # Atualiza o React em tempo real
+        progresso_demografia["atual"] = len(pessoas_basicas)
+            
+        if not dados.get('has_more'): continuar = False
+        else: pagina += 1
+
+    # FASE 2: Verificar quem é Novo (Precisa de ficha detalhada)
+    progresso_demografia["mensagem"] = "Analisando endereços em cache..."
+    ids_faltantes = []
+    for p in pessoas_basicas:
+        pid = str(p.get('id'))
+        if pid not in cache_pessoas or not cache_pessoas.get(pid):
+            ids_faltantes.append(pid)
+
+    # FASE 3: Descarregar as Fichas Novas
+    if ids_faltantes:
+        progresso_demografia["total"] = len(ids_faltantes)
+        progresso_demografia["atual"] = 0
+        progresso_demografia["mensagem"] = "Sincronizando novas fichas detalhadas..."
         
-    return {"clientes": clientes}
+        def fetch_pessoa_detail(pid):
+            try:
+                r = requests.get(f"{BASE_URL}/v2/site/pessoa/{pid}", auth=(USUARIO, SENHA), params={"listaEnderecos": 1}, timeout=10)
+                if r.status_code == 200:
+                    resp = r.json()
+                    if 'pessoaEndereco' in resp: return pid, resp
+                    else: return pid, resp.get('data', {})
+            except: pass
+            return pid, None
+
+        lock = threading.Lock() # Trava de segurança para somar certinho
+        
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            resultados = executor.map(fetch_pessoa_detail, ids_faltantes)
+            for pid, detalhe in resultados:
+                if detalhe: 
+                    cache_pessoas[pid] = detalhe
+                # O Python soma 1 na barra de progresso em tempo real
+                with lock:
+                    progresso_demografia["atual"] += 1
+        
+        salvar_cache_pessoas(cache_pessoas)
+
+    # FASE 4: Montagem Final
+    progresso_demografia["mensagem"] = "Desenhando o mapa..."
+    progresso_demografia["total"] = len(pessoas_basicas)
+    progresso_demografia["atual"] = len(pessoas_basicas)
+    
+    clientes_finais = []
+    
+    for p in pessoas_basicas:
+        pid = str(p.get('id'))
+        detalhe = cache_pessoas.get(pid, {})
+            
+        nascimento = p.get('dataNascimento') or detalhe.get('dataNascimento')
+        enderecos = detalhe.get('pessoaEndereco') or p.get('pessoaEndereco')
+        
+        estado = "Desconhecido" 
+        
+        if isinstance(enderecos, list) and len(enderecos) > 0: sigla = enderecos[0].get('estadoSigla')
+        elif isinstance(enderecos, dict): sigla = enderecos.get('estadoSigla')
+        else: sigla = None
+            
+        if sigla and isinstance(sigla, str): estado = sigla.upper().strip()
+        
+        faixa = "Não informada"
+        if nascimento and isinstance(nascimento, str):
+            try:
+                dt_nasc = datetime.strptime(nascimento[:10], "%Y-%m-%d")
+                idade = hoje.year - dt_nasc.year - ((hoje.month, hoje.day) < (dt_nasc.month, dt_nasc.day))
+                
+                if 10 <= idade <= 19: faixa = "10-19 anos"
+                elif 20 <= idade <= 29: faixa = "20-29 anos"
+                elif 30 <= idade <= 39: faixa = "30-39 anos"
+                elif 40 <= idade <= 49: faixa = "40-49 anos"
+                elif 50 <= idade <= 59: faixa = "50-59 anos"
+                elif 60 <= idade <= 69: faixa = "60-69 anos"
+                elif idade >= 70: faixa = "70+ anos"
+            except: pass
+        
+        clientes_finais.append({"estado": estado, "faixa": faixa})
+        
+    progresso_demografia["mensagem"] = "Concluído!"
+    return {"clientes": clientes_finais}
+
+@app.get("/api/dashboard/progresso-demografia")
+def get_progresso():
+    return progresso_demografia
 
 if __name__ == "__main__":
     import uvicorn

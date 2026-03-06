@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, LabelList } from 'recharts';
 import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut, MapPin, Shirt } from 'lucide-react';
-import { ComposableMap, Geographies, Geography, Marker } from "react-simple-maps";
+import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from "react-simple-maps";
 import { Users, Map as MapIcon, RefreshCcw } from "lucide-react";
 
 // URL oficial do GeoJSON do Brasil
@@ -21,6 +21,8 @@ const COORDENADAS_ESTADOS = {
 
 function App() {
   const [dataDemografia, setDataDemografia] = useState(null);
+  const [percentualDemografia, setPercentualDemografia] = useState(25); // Inicia nos 25%
+  const [progressoData, setProgressoData] = useState(null); // Guarda a contagem
 
   // --- ESTADO DE AUTENTICAÇÃO ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -45,9 +47,9 @@ function App() {
 
   // --- DICIONÁRIO DE METAS POR MÊS/ANO ---
   const [metasMensais, setMetasMensais] = useState({
-    "1-2026": 50000, 
-    "2-2026": 60000, 
-    "3-2026": 70000  
+    "1-2026": 50000,
+    "2-2026": 60000,
+    "3-2026": 70000
   });
 
   const metaMensalAtiva = metasMensais[`${mesSelecionado}-${anoSelecionado}`] || 60000;
@@ -81,8 +83,8 @@ function App() {
     setLoading(true);
 
     try {
-      const BASE_API = "https://api-viadoterno.onrender.com";
-      //const BASE_API = "http://localhost:8000";
+      //const BASE_API = "https://api-viadoterno.onrender.com";
+      const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
         let url = `${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`;
@@ -109,9 +111,26 @@ function App() {
         setLoading(false);
       }
       else if (abaAtiva === 'demografia') {
-        const res = await axios.get(`${BASE_API}/api/dashboard/clientes-demografia`);
-        setDataDemografia(res.data);
-        setLoading(false);
+        setProgressoData({ mensagem: "Conectando ao servidor...", atual: 0, total: 0 });
+
+        // Inicia o Espião (A cada 1 segundo ele vai ver como está a barra)
+        const interval = setInterval(async () => {
+          try {
+            const pRes = await axios.get(`${BASE_API}/api/dashboard/progresso-demografia`);
+            setProgressoData(pRes.data);
+          } catch (e) { }
+        }, 1000);
+
+        try {
+          // Faz a requisição enviando a porcentagem escolhida
+          const res = await axios.get(`${BASE_API}/api/dashboard/clientes-demografia?percentual=${percentualDemografia}`);
+          setDataDemografia(res.data);
+        } finally {
+          // Quando terminar, desliga o espião e limpa a tela de loading
+          clearInterval(interval);
+          setProgressoData(null);
+          setLoading(false);
+        }
       }
     } catch (err) {
       console.error("Erro geral:", err);
@@ -132,7 +151,8 @@ function App() {
     metaMensalAtiva,
     isAuthenticated,
     mesSelecionado,
-    anoSelecionado
+    anoSelecionado,
+    percentualDemografia
   ]);
 
   const handleLogout = () => {
@@ -176,12 +196,32 @@ function App() {
             alt="Carregando..."
             className="h-24 md:h-32 object-contain animate-logo-breathe mb-6"
           />
-          <div className="w-48 h-1 bg-gray-100 rounded-full overflow-hidden mb-2">
-            <div className="h-full bg-slate-800 animate-[pulse_1.5s_ease-in-out_infinite] w-2/3 rounded-full"></div>
-          </div>
-          <p className="text-gray-500 font-light tracking-[0.2em] uppercase text-xs animate-pulse">
-            Sincronizando dados...
-          </p>
+
+          {abaAtiva === 'demografia' && progressoData ? (
+            <div className="w-72 flex flex-col items-center">
+              <p className="text-gray-600 font-bold text-sm mb-3 uppercase tracking-wider">{progressoData.mensagem}</p>
+              <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-2 shadow-inner">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-500 ease-out"
+                  style={{ width: progressoData.total > 0 ? `${(progressoData.atual / progressoData.total) * 100}%` : '0%' }}
+                ></div>
+              </div>
+              {progressoData.total > 0 && (
+                <p className="text-xs text-blue-600 font-black">{progressoData.atual} de {progressoData.total} Registos</p>
+              )}
+            </div>
+          ) : (
+            /* Aumentei para w-64 para a barra ficar proporcional */
+            <div className="w-64 flex flex-col items-center">
+              <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-slate-800 animate-[pulse_1.5s_ease-in-out_infinite] w-2/3 rounded-full"></div>
+              </div>
+              {/* Adicionei o whitespace-nowrap para blindar a quebra de linha */}
+              <p className="text-gray-500 font-light tracking-[0.2em] uppercase text-xs animate-pulse whitespace-nowrap">
+                Sincronizando dados...
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -259,7 +299,11 @@ function App() {
         )}
 
         {abaAtiva === 'demografia' && (
-          <DashboardDemografia data={dataDemografia} />
+          <DashboardDemografia
+            data={dataDemografia}
+            percentual={percentualDemografia}
+            setPercentual={setPercentualDemografia}
+          />
         )}
       </div>
     </div>
@@ -279,8 +323,8 @@ function LoginPage({ onLoginSuccess }) {
     setError('');
 
     try {
-      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      //await axios.post('http://localhost:8000/api/login', { username, password });
+      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      await axios.post('http://localhost:8000/api/login', { username, password });
       localStorage.setItem('via_token', 'logado_com_sucesso');
       onLoginSuccess();
     } catch (err) {
@@ -1037,12 +1081,20 @@ function KpiCard({ title, value, icon, accent = 'blue', crescimento }) {
 }
 
 function DashboardCarrinhos({ data, formatMoney }) {
-  if (!data) return <div className="text-center py-20 text-gray-400">Buscando leads em carrinhos abandonados...</div>;
+  // 1. Proteção inicial mais forte (garante que data.carrinhos existe)
+  if (!data || !data.carrinhos) return <div className="text-center py-20 text-gray-400">Buscando leads em carrinhos abandonados...</div>;
 
   const getWaLink = (tel, nome) => {
-    const limpo = tel.replace(/\D/g, "");
-    const msg = `Olá ${nome.split(" ")[0]}, tudo bem? Vimos que você deixou alguns itens no carrinho da Via do Terno e preparamos uma condição especial para você finalizar sua compra!\n\nUse o cupom *FRETEGRATIS* para conseguir 15% OFF e frete grátis!`
+    // 2. Proteção contra valores nulos/undefined (A ARMADURA)
+    const telefoneSeguro = tel || "";
+    const nomeSeguro = nome || "Cliente";
     
+    // Converte para String antes de fazer o replace, só por garantia
+    const limpo = String(telefoneSeguro).replace(/\D/g, "");
+    const primeiroNome = nomeSeguro.split(" ")[0];
+    
+    const msg = `Olá ${primeiroNome}, tudo bem? Vimos que você deixou alguns itens no carrinho da Via do Terno e preparamos uma condição especial para você finalizar sua compra!\n\nUse o cupom *FRETEGRATIS* para conseguir 15% OFF e frete grátis!`
+
     return `https://wa.me/55${limpo}?text=${encodeURIComponent(msg)}`;
   };
 
@@ -1067,27 +1119,47 @@ function DashboardCarrinhos({ data, formatMoney }) {
                 <span className="bg-orange-100 text-orange-600 px-2 py-1 rounded-lg text-xs font-black">{c.total_itens} item(ns)</span>
               </div>
 
-              <h3 className="font-black text-gray-800 text-lg mb-1 uppercase truncate">{c.nome}</h3>
-              <p className="text-gray-400 text-sm mb-4 truncate">{c.email}</p>
+              {/* 3. Prevenção para clientes sem nome/email no cadastro do carrinho */}
+              <h3 className="font-black text-gray-800 text-lg mb-1 uppercase truncate">
+                {c.nome || "Lead sem nome"}
+              </h3>
+              <p className="text-gray-400 text-sm mb-4 truncate">
+                {c.email || "Sem e-mail cadastrado"}
+              </p>
 
               <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-                {c.produtos.map((p, idx) => (
+                {/* 4. Proteção caso não tenha carregado as imagens do produto */}
+                {(c.produtos || []).map((p, idx) => (
                   <img key={idx} src={p.img} alt={p.nome} className="h-12 w-12 rounded-lg object-cover border border-gray-50" title={p.nome} />
                 ))}
               </div>
             </div>
 
             <div className="p-4 bg-gray-50 flex gap-2">
-              <a
-                href={getWaLink(c.telefone, c.nome)}
-                target="_blank"
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-center py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <RefreshCw size={16} /> WhatsApp
-              </a>
+              {/* 5. Se o cliente tiver telefone, mostra o botão verde. Se não, mostra desativado */}
+              {c.telefone ? (
+                <a
+                  href={getWaLink(c.telefone, c.nome)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-center py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <RefreshCw size={16} /> WhatsApp
+                </a>
+              ) : (
+                <button
+                  disabled
+                  title="O cliente não informou o telefone no carrinho"
+                  className="flex-1 bg-gray-200 text-gray-400 text-center py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-not-allowed"
+                >
+                  <RefreshCw size={16} /> Sem Número
+                </button>
+              )}
+              
               <a
                 href={c.url_checkout}
                 target="_blank"
+                rel="noreferrer"
                 className="flex-1 bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 text-center py-3 rounded-xl text-sm font-bold transition-colors"
               >
                 Checkout
@@ -1099,21 +1171,31 @@ function DashboardCarrinhos({ data, formatMoney }) {
 
       {data.carrinhos.length === 0 && (
         <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200">
-          <p className="text-gray-400">Nenhum lead encontrado nos carrinhos dos últimos 7 dias.</p>
+          <p className="text-gray-400">Nenhum lead encontrado nos carrinhos dos últimos dias.</p>
         </div>
       )}
     </div>
   );
 }
 
-function DashboardDemografia({ data }) {
+function DashboardDemografia({ data, percentual, setPercentual }) {
   const [estadoSelecionado, setEstadoSelecionado] = useState(null);
   const [faixaSelecionada, setFaixaSelecionada] = useState(null);
+
+  const handleMudarPercentual = (e) => {
+    const val = Number(e.target.value);
+    if (val === 100) {
+      const confirma = window.confirm("Atenção! Analisar 100% da base pode demorar alguns minutos da primeira vez. Deseja prosseguir?");
+      if (!confirma) return;
+    }
+    setPercentual(val);
+  };
 
   if (!data || !data.clientes) return <div className="text-center py-20 text-gray-500">Carregando mapa...</div>;
 
   const clientes = data.clientes;
 
+  // Filtra clientes para o gráfico de barras (se clicar num Estado, filtra pela idade daquele estado)
   const clientesParaBarras = clientes.filter(c => estadoSelecionado ? c.estado === estadoSelecionado : true);
   const contagemFaixas = clientesParaBarras.reduce((acc, c) => {
     acc[c.faixa] = (acc[c.faixa] || 0) + 1;
@@ -1124,20 +1206,36 @@ function DashboardDemografia({ data }) {
     .map(faixa => ({ faixa, quantidade: contagemFaixas[faixa] }))
     .sort((a, b) => a.faixa.localeCompare(b.faixa));
 
+  // Filtra clientes para o Mapa (se clicar numa Idade, mostra os estados daquela idade)
   const clientesParaMapa = clientes.filter(c => faixaSelecionada ? c.faixa === faixaSelecionada : true);
+
   const contagemEstados = clientesParaMapa.reduce((acc, c) => {
-    acc[c.estado] = (acc[c.estado] || 0) + 1;
+    if (c.estado !== "Desconhecido") {
+      acc[c.estado] = (acc[c.estado] || 0) + 1;
+    }
     return acc;
   }, {});
+
+  const totalComEstado = Object.values(contagemEstados).reduce((a, b) => a + b, 0);
+  const maxQtd = Math.max(...Object.values(contagemEstados), 1);
 
   const limparFiltros = () => {
     setEstadoSelecionado(null);
     setFaixaSelecionada(null);
   };
 
+  const getBubbleColor = (ratio) => {
+    if (ratio >= 0.8) return "#1e40af";
+    if (ratio >= 0.5) return "#3b82f6";
+    if (ratio >= 0.3) return "#60a5fa";
+    if (ratio >= 0.1) return "#f87171";
+    return "#b91c1c";
+  };
+
   return (
     <div className="space-y-6">
-      <div className="bg-gradient-to-r from-blue-700 to-blue-500 p-6 rounded-3xl shadow-lg text-white flex justify-between items-center">
+
+      <div className="bg-gradient-to-r from-blue-700 to-blue-500 p-6 rounded-3xl shadow-lg text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-2xl font-black flex items-center gap-3">
             <Users size={28} /> Demografia de Clientes
@@ -1146,61 +1244,137 @@ function DashboardDemografia({ data }) {
             Clique em um Estado ou em uma Faixa Etária para cruzar os dados de onde seu público está.
           </p>
         </div>
-        {(estadoSelecionado || faixaSelecionada) && (
-          <button onClick={limparFiltros} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-xl transition-colors font-bold text-sm">
-            <RefreshCcw size={16} /> Limpar Filtros
-          </button>
-        )}
+
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 bg-white/20 p-1.5 rounded-xl">
+            <span className="text-xs font-bold text-blue-100 pl-2 uppercase tracking-wider">Amostragem:</span>
+            <select
+              value={percentual}
+              onChange={handleMudarPercentual}
+              className="bg-blue-800 text-white border-none rounded-lg px-3 py-1.5 outline-none font-bold focus:ring-2 focus:ring-blue-400 transition-colors cursor-pointer appearance-none text-sm"
+            >
+              <option value={25}>25% da Base (Rápido)</option>
+              <option value={50}>50% da Base</option>
+              <option value={75}>75% da Base</option>
+              <option value={100}>100% da Base (Lento)</option>
+            </select>
+          </div>
+
+          {(estadoSelecionado || faixaSelecionada) && (
+            <button onClick={limparFiltros} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-xl transition-colors font-bold text-sm">
+              <RefreshCcw size={16} /> Limpar
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+
+        {/* MAPA */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative">
           <h3 className="font-bold text-lg mb-4 text-gray-800 flex items-center gap-2">
             <MapIcon className="text-orange-500" />
             Concentração de Público
-            {faixaSelecionada && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-lg ml-2">Filtrado: {faixaSelecionada}</span>}
+            {/* NOVIDADE: Mostra o total de pessoas daquela faixa etária selecionada */}
+            {faixaSelecionada && (
+              <span className="text-xs bg-orange-100 text-orange-700 px-3 py-1 rounded-lg ml-2 font-bold">
+                Filtrado: {faixaSelecionada} ({clientesParaMapa.length} pessoas)
+              </span>
+            )}
           </h3>
-          <div className="flex-1 bg-blue-50/30 rounded-2xl relative overflow-hidden" style={{ minHeight: '400px' }}>
-            <ComposableMap projection="geoMercator" projectionConfig={{ scale: 750, center: [-54, -15] }} style={{ width: "100%", height: "100%" }}>
-              <Geographies geography={geoUrl}>
-                {({ geographies }) =>
-                  geographies.map((geo) => (
-                    <Geography key={geo.rsmKey} geography={geo} fill="#f1f5f9" stroke="#cbd5e1" style={{ default: { outline: 'none' }, hover: { fill: '#e2e8f0', outline: 'none' }, pressed: { outline: 'none' } }} />
-                  ))
-                }
-              </Geographies>
 
-              {Object.entries(COORDENADAS_ESTADOS).map(([uf, coords]) => {
-                const qtd = contagemEstados[uf] || 0;
-                if (qtd === 0) return null;
+          {/* NOVIDADE: Aumentei a altura para 550px e o padding inferior */}
+          <div className="flex-1 bg-blue-50/30 rounded-2xl relative overflow-hidden group cursor-grab active:cursor-grabbing pb-12" style={{ minHeight: '550px' }}>
 
-                const isSelected = uf === estadoSelecionado;
-                const isFaded = estadoSelecionado && !isSelected;
-                const size = Math.min(Math.max(6, Math.sqrt(qtd) * 4), 30);
+            <div className="absolute top-4 left-4 z-10 bg-white/80 backdrop-blur px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              <p className="text-[10px] font-bold text-gray-500 uppercase">Use a roda do mouse para Zoom</p>
+            </div>
 
-                return (
-                  <Marker key={uf} coordinates={coords} onClick={() => setEstadoSelecionado(isSelected ? null : uf)} style={{ cursor: "pointer" }}>
-                    <circle r={size} fill={isSelected ? "#ea580c" : "#f97316"} fillOpacity={isFaded ? 0.3 : 0.8} stroke="#ffffff" strokeWidth={2} className="transition-all duration-300" />
-                    <text textAnchor="middle" y={isSelected ? -size - 4 : 4} style={{ fontSize: isSelected ? "12px" : "10px", fill: isSelected ? "#c2410c" : "#fff", fontWeight: "900", pointerEvents: "none" }} className="transition-all duration-300">
-                      {uf}
-                    </text>
-                  </Marker>
-                );
-              })}
+            {/* NOVIDADE: Reduzi o scale para 650 para afastar o Brasil das bordas */}
+            <ComposableMap projection="geoMercator" projectionConfig={{ scale: 650, center: [-54, -15] }} style={{ width: "100%", height: "100%" }}>
+              <ZoomableGroup zoom={1} minZoom={1} maxZoom={6} center={[-54, -15]}>
+                <Geographies geography={geoUrl}>
+                  {({ geographies }) =>
+                    geographies.map((geo) => (
+                      <Geography key={geo.rsmKey} geography={geo} fill="#f1f5f9" stroke="#cbd5e1" style={{ default: { outline: 'none' }, hover: { fill: '#e2e8f0', outline: 'none' }, pressed: { outline: 'none' } }} />
+                    ))
+                  }
+                </Geographies>
+
+                {Object.entries(COORDENADAS_ESTADOS).map(([uf, coords]) => {
+                  const qtd = contagemEstados[uf] || 0;
+                  if (qtd === 0) return null;
+
+                  const ratio = qtd / maxQtd;
+                  const pct = (qtd / totalComEstado) * 100;
+                  const size = 16 + (ratio * 29);
+                  const isSelected = uf === estadoSelecionado;
+                  const isFaded = estadoSelecionado && !isSelected;
+
+                  return (
+                    <Marker key={uf} coordinates={coords} onClick={() => setEstadoSelecionado(isSelected ? null : uf)} style={{ cursor: "pointer" }}>
+                      <circle
+                        r={size}
+                        fill={getBubbleColor(ratio)}
+                        fillOpacity={isFaded ? 0.2 : 0.9}
+                        stroke={isSelected ? "#fff" : "rgba(255,255,255,0.4)"}
+                        strokeWidth={isSelected ? 3 : 1}
+                        className="transition-all duration-300"
+                      />
+                      <text
+                        textAnchor="middle"
+                        y={size > 22 ? -2 : 3}
+                        style={{ fontSize: size > 22 ? "12px" : "9px", fill: "#fff", fontWeight: "900", pointerEvents: "none", textShadow: "0px 1px 3px rgba(0,0,0,0.8)" }}
+                        className="transition-all duration-300"
+                      >
+                        {uf}
+                      </text>
+                      {size > 22 && (
+                        <text
+                          textAnchor="middle"
+                          y={9}
+                          style={{ fontSize: "9px", fill: "#fff", fontWeight: "bold", pointerEvents: "none", textShadow: "0px 1px 2px rgba(0,0,0,0.8)" }}
+                          className="transition-all duration-300"
+                        >
+                          {pct.toFixed(1)}%
+                        </text>
+                      )}
+                    </Marker>
+                  );
+                })}
+              </ZoomableGroup>
             </ComposableMap>
+
+            {/* Legenda na base ajustada */}
+            <div className="absolute bottom-4 left-0 right-0 mx-auto w-max bg-white/90 backdrop-blur-sm px-6 py-3 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center z-10">
+              <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider mb-2">Densidade de Clientes</span>
+              <div className="w-48 h-2.5 rounded-full" style={{ background: "linear-gradient(to right, #b91c1c, #f87171, #60a5fa, #3b82f6, #1e40af)" }}></div>
+              <div className="w-full flex justify-between text-[9px] font-black text-gray-400 mt-1 uppercase">
+                <span>Menor</span>
+                <span>Maior</span>
+              </div>
+            </div>
+
           </div>
         </div>
 
+        {/* GRÁFICO DE BARRAS */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
           <h3 className="font-bold text-lg mb-6 text-gray-800 flex items-center gap-2">
             <Users className="text-blue-500" />
             Distribuição por Idade
-            {estadoSelecionado && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-lg ml-2">Filtrado: Estado de {estadoSelecionado}</span>}
+            {/* NOVIDADE: Mostra o total de pessoas do Estado selecionado */}
+            {estadoSelecionado && (
+              <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg ml-2 font-bold">
+                Filtrado: {estadoSelecionado} ({clientesParaBarras.length} pessoas)
+              </span>
+            )}
           </h3>
-          <div className="flex-1" style={{ minHeight: '400px' }}>
+          <div className="flex-1" style={{ minHeight: '550px' }}>
             {dataBarras.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dataBarras} margin={{ top: 20, right: 30, left: -20, bottom: 20 }}>
+                {/* NOVIDADE: Margin top aumentada para dar espaço para o número no topo da barra */}
+                <BarChart data={dataBarras} margin={{ top: 30, right: 30, left: -20, bottom: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="faixa" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 'bold', fill: '#64748b' }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
@@ -1221,6 +1395,8 @@ function DashboardDemografia({ data }) {
                         />
                       );
                     })}
+                    {/* NOVIDADE: O número fixo no topo de cada barra */}
+                    <LabelList dataKey="quantidade" position="top" fill="#64748b" fontSize={13} fontWeight="bold" />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
