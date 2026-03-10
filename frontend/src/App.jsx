@@ -3,7 +3,7 @@ import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, LabelList } from 'recharts';
 import { DollarSign, ShoppingBag, TrendingUp, RefreshCw, Filter, Award, Tag, Calendar, Loader2, ArrowUp, ArrowDown, CalendarDays, Settings, Lock, User, LogOut, MapPin, Shirt } from 'lucide-react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from "react-simple-maps";
-import { Users, Map as MapIcon, RefreshCcw } from "lucide-react";
+import { Users, Map as MapIcon, RefreshCcw, Download } from "lucide-react";
 
 // URL oficial do GeoJSON do Brasil
 const geoUrl = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson";
@@ -83,8 +83,8 @@ function App() {
     setLoading(true);
 
     try {
-      //const BASE_API = "https://api-viadoterno.onrender.com";
-      const BASE_API = "http://localhost:8000";
+      const BASE_API = "https://api-viadoterno.onrender.com";
+      //const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
         let url = `${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`;
@@ -323,8 +323,8 @@ function LoginPage({ onLoginSuccess }) {
     setError('');
 
     try {
-      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      await axios.post('http://localhost:8000/api/login', { username, password });
+      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      //await axios.post('http://localhost:8000/api/login', { username, password });
       localStorage.setItem('via_token', 'logado_com_sucesso');
       onLoginSuccess();
     } catch (err) {
@@ -1191,11 +1191,16 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
     setPercentual(val);
   };
 
-  if (!data || !data.clientes) return <div className="text-center py-20 text-gray-500">Carregando mapa...</div>;
+  if (!data || !data.clientes) return <div className="text-center py-20 text-gray-500">A carregar mapa...</div>;
 
   const clientes = data.clientes;
 
-  // Filtra clientes para o gráfico de barras (se clicar num Estado, filtra pela idade daquele estado)
+  // Cruza os filtros ativados para encontrar a lista final absoluta
+  const clientesFiltrados = clientes.filter(c => 
+    (estadoSelecionado ? c.estado === estadoSelecionado : true) && 
+    (faixaSelecionada ? c.faixa === faixaSelecionada : true)
+  );
+
   const clientesParaBarras = clientes.filter(c => estadoSelecionado ? c.estado === estadoSelecionado : true);
   const contagemFaixas = clientesParaBarras.reduce((acc, c) => {
     acc[c.faixa] = (acc[c.faixa] || 0) + 1;
@@ -1206,9 +1211,8 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
     .map(faixa => ({ faixa, quantidade: contagemFaixas[faixa] }))
     .sort((a, b) => a.faixa.localeCompare(b.faixa));
 
-  // Filtra clientes para o Mapa (se clicar numa Idade, mostra os estados daquela idade)
   const clientesParaMapa = clientes.filter(c => faixaSelecionada ? c.faixa === faixaSelecionada : true);
-
+  
   const contagemEstados = clientesParaMapa.reduce((acc, c) => {
     if (c.estado !== "Desconhecido") {
       acc[c.estado] = (acc[c.estado] || 0) + 1;
@@ -1225,72 +1229,105 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
   };
 
   const getBubbleColor = (ratio) => {
-    if (ratio >= 0.8) return "#1e40af";
-    if (ratio >= 0.5) return "#3b82f6";
-    if (ratio >= 0.3) return "#60a5fa";
-    if (ratio >= 0.1) return "#f87171";
-    return "#b91c1c";
+    if (ratio >= 0.8) return "#1e40af"; 
+    if (ratio >= 0.5) return "#3b82f6"; 
+    if (ratio >= 0.3) return "#60a5fa"; 
+    if (ratio >= 0.1) return "#f87171"; 
+    return "#b91c1c"; 
+  };
+
+  // Função Mágica para Exportar Excel/CSV
+  const exportarCSV = () => {
+    if (clientesFiltrados.length === 0) {
+      alert("Não há clientes para exportar com estes filtros.");
+      return;
+    }
+
+    const headers = ["Nome", "Email", "Telefone", "Cidade", "Estado", "Faixa Etária"];
+    
+    const linhas = clientesFiltrados.map(c => {
+      // Usa aspas para evitar que vírgulas nos nomes quebrem as colunas do Excel
+      return `"${c.nome || ''}","${c.email || ''}","${c.telefone || ''}","${c.cidade || ''}","${c.estado || ''}","${c.faixa || ''}"`;
+    });
+
+    const csvContent = [headers.join(","), ...linhas].join("\n");
+    
+    // O prefixo \uFEFF força o Excel a reconhecer acentos em português (UTF-8 BOM)
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Leads_${estadoSelecionado || 'Geral'}_${faixaSelecionada || 'TodasIdades'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
     <div className="space-y-6">
-
+      
       <div className="bg-gradient-to-r from-blue-700 to-blue-500 p-6 rounded-3xl shadow-lg text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-2xl font-black flex items-center gap-3">
             <Users size={28} /> Demografia de Clientes
           </h2>
           <p className="text-blue-100 text-sm mt-1">
-            Clique em um Estado ou em uma Faixa Etária para cruzar os dados de onde seu público está.
+            Clique num Estado ou numa Faixa Etária para cruzar os dados.
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2 bg-white/20 p-1.5 rounded-xl">
             <span className="text-xs font-bold text-blue-100 pl-2 uppercase tracking-wider">Amostragem:</span>
-            <select
-              value={percentual}
-              onChange={handleMudarPercentual}
+            <select 
+              value={percentual} 
+              onChange={handleMudarPercentual} 
               className="bg-blue-800 text-white border-none rounded-lg px-3 py-1.5 outline-none font-bold focus:ring-2 focus:ring-blue-400 transition-colors cursor-pointer appearance-none text-sm"
             >
-              <option value={25}>25% da Base (Rápido)</option>
-              <option value={50}>50% da Base</option>
-              <option value={75}>75% da Base</option>
-              <option value={100}>100% da Base (Lento)</option>
+               <option value={25}>25% da Base</option>
+               <option value={50}>50% da Base</option>
+               <option value={75}>75% da Base</option>
+               <option value={100}>100% da Base</option>
             </select>
           </div>
-
-          {(estadoSelecionado || faixaSelecionada) && (
-            <button onClick={limparFiltros} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-xl transition-colors font-bold text-sm">
-              <RefreshCcw size={16} /> Limpar
+          
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={exportarCSV} 
+              className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-xl transition-colors font-bold text-sm shadow-sm"
+            >
+              <Download size={16} /> Exportar ({clientesFiltrados.length})
             </button>
-          )}
+
+            {(estadoSelecionado || faixaSelecionada) && (
+              <button onClick={limparFiltros} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-xl transition-colors font-bold text-sm">
+                <RefreshCcw size={16} /> Limpar
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-
+        
         {/* MAPA */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col relative">
           <h3 className="font-bold text-lg mb-4 text-gray-800 flex items-center gap-2">
             <MapIcon className="text-orange-500" />
             Concentração de Público
-            {/* NOVIDADE: Mostra o total de pessoas daquela faixa etária selecionada */}
             {faixaSelecionada && (
               <span className="text-xs bg-orange-100 text-orange-700 px-3 py-1 rounded-lg ml-2 font-bold">
-                Filtrado: {faixaSelecionada} ({clientesParaMapa.length} pessoas)
+                Filtrado: {faixaSelecionada}
               </span>
             )}
           </h3>
-
-          {/* NOVIDADE: Aumentei a altura para 550px e o padding inferior */}
+          
           <div className="flex-1 bg-blue-50/30 rounded-2xl relative overflow-hidden group cursor-grab active:cursor-grabbing pb-12" style={{ minHeight: '550px' }}>
-
+            
             <div className="absolute top-4 left-4 z-10 bg-white/80 backdrop-blur px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              <p className="text-[10px] font-bold text-gray-500 uppercase">Use a roda do mouse para Zoom</p>
+              <p className="text-[10px] font-bold text-gray-500 uppercase">Use a roda do rato para Zoom</p>
             </div>
 
-            {/* NOVIDADE: Reduzi o scale para 650 para afastar o Brasil das bordas */}
             <ComposableMap projection="geoMercator" projectionConfig={{ scale: 650, center: [-54, -15] }} style={{ width: "100%", height: "100%" }}>
               <ZoomableGroup zoom={1} minZoom={1} maxZoom={6} center={[-54, -15]}>
                 <Geographies geography={geoUrl}>
@@ -1313,27 +1350,27 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
 
                   return (
                     <Marker key={uf} coordinates={coords} onClick={() => setEstadoSelecionado(isSelected ? null : uf)} style={{ cursor: "pointer" }}>
-                      <circle
-                        r={size}
-                        fill={getBubbleColor(ratio)}
-                        fillOpacity={isFaded ? 0.2 : 0.9}
-                        stroke={isSelected ? "#fff" : "rgba(255,255,255,0.4)"}
-                        strokeWidth={isSelected ? 3 : 1}
-                        className="transition-all duration-300"
+                      <circle 
+                        r={size} 
+                        fill={getBubbleColor(ratio)} 
+                        fillOpacity={isFaded ? 0.2 : 0.9} 
+                        stroke={isSelected ? "#fff" : "rgba(255,255,255,0.4)"} 
+                        strokeWidth={isSelected ? 3 : 1} 
+                        className="transition-all duration-300" 
                       />
-                      <text
-                        textAnchor="middle"
-                        y={size > 22 ? -2 : 3}
-                        style={{ fontSize: size > 22 ? "12px" : "9px", fill: "#fff", fontWeight: "900", pointerEvents: "none", textShadow: "0px 1px 3px rgba(0,0,0,0.8)" }}
+                      <text 
+                        textAnchor="middle" 
+                        y={size > 22 ? -2 : 3} 
+                        style={{ fontSize: size > 22 ? "12px" : "9px", fill: "#fff", fontWeight: "900", pointerEvents: "none", textShadow: "0px 1px 3px rgba(0,0,0,0.8)" }} 
                         className="transition-all duration-300"
                       >
                         {uf}
                       </text>
                       {size > 22 && (
-                        <text
-                          textAnchor="middle"
-                          y={9}
-                          style={{ fontSize: "9px", fill: "#fff", fontWeight: "bold", pointerEvents: "none", textShadow: "0px 1px 2px rgba(0,0,0,0.8)" }}
+                        <text 
+                          textAnchor="middle" 
+                          y={9} 
+                          style={{ fontSize: "9px", fill: "#fff", fontWeight: "bold", pointerEvents: "none", textShadow: "0px 1px 2px rgba(0,0,0,0.8)" }} 
                           className="transition-all duration-300"
                         >
                           {pct.toFixed(1)}%
@@ -1345,7 +1382,6 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
               </ZoomableGroup>
             </ComposableMap>
 
-            {/* Legenda na base ajustada */}
             <div className="absolute bottom-4 left-0 right-0 mx-auto w-max bg-white/90 backdrop-blur-sm px-6 py-3 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center z-10">
               <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider mb-2">Densidade de Clientes</span>
               <div className="w-48 h-2.5 rounded-full" style={{ background: "linear-gradient(to right, #b91c1c, #f87171, #60a5fa, #3b82f6, #1e40af)" }}></div>
@@ -1363,17 +1399,15 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
           <h3 className="font-bold text-lg mb-6 text-gray-800 flex items-center gap-2">
             <Users className="text-blue-500" />
             Distribuição por Idade
-            {/* NOVIDADE: Mostra o total de pessoas do Estado selecionado */}
             {estadoSelecionado && (
               <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg ml-2 font-bold">
-                Filtrado: {estadoSelecionado} ({clientesParaBarras.length} pessoas)
+                Filtrado: {estadoSelecionado}
               </span>
             )}
           </h3>
           <div className="flex-1" style={{ minHeight: '550px' }}>
             {dataBarras.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                {/* NOVIDADE: Margin top aumentada para dar espaço para o número no topo da barra */}
                 <BarChart data={dataBarras} margin={{ top: 30, right: 30, left: -20, bottom: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="faixa" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 'bold', fill: '#64748b' }} />
@@ -1395,7 +1429,6 @@ function DashboardDemografia({ data, percentual, setPercentual }) {
                         />
                       );
                     })}
-                    {/* NOVIDADE: O número fixo no topo de cada barra */}
                     <LabelList dataKey="quantidade" position="top" fill="#64748b" fontSize={13} fontWeight="bold" />
                   </Bar>
                 </BarChart>

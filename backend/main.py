@@ -596,12 +596,20 @@ def get_clientes_demografia(percentual: int = 25):
             
         nascimento = p.get('dataNascimento') or detalhe.get('dataNascimento')
         enderecos = detalhe.get('pessoaEndereco') or p.get('pessoaEndereco')
+        # Procura os contactos no detalhe ou na lista básica
+        contatos = detalhe.get('pessoaContato') or p.get('pessoaContato') or []
         
         estado = "Desconhecido" 
+        cidade = "Desconhecida"
         
-        if isinstance(enderecos, list) and len(enderecos) > 0: sigla = enderecos[0].get('estadoSigla')
-        elif isinstance(enderecos, dict): sigla = enderecos.get('estadoSigla')
-        else: sigla = None
+        if isinstance(enderecos, list) and len(enderecos) > 0: 
+            sigla = enderecos[0].get('estadoSigla')
+            cidade = enderecos[0].get('cidadeNome', 'Desconhecida')
+        elif isinstance(enderecos, dict): 
+            sigla = enderecos.get('estadoSigla')
+            cidade = enderecos.get('cidadeNome', 'Desconhecida')
+        else: 
+            sigla = None
             
         if sigla and isinstance(sigla, str): estado = sigla.upper().strip()
         
@@ -619,8 +627,20 @@ def get_clientes_demografia(percentual: int = 25):
                 elif 60 <= idade <= 69: faixa = "60-69 anos"
                 elif idade >= 70: faixa = "70+ anos"
             except: pass
+            
+        # Tenta extrair o primeiro telefone que encontrar
+        telefone = ""
+        if isinstance(contatos, list) and len(contatos) > 0:
+            telefone = contatos[0].get('contato', '')
         
-        clientes_finais.append({"estado": estado, "faixa": faixa})
+        clientes_finais.append({
+            "nome": p.get('nome', 'Sem nome'),
+            "email": p.get('email', ''),
+            "telefone": telefone,
+            "cidade": cidade,
+            "estado": estado, 
+            "faixa": faixa
+        })
         
     progresso_demografia["mensagem"] = "Concluído!"
     return {"clientes": clientes_finais}
