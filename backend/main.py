@@ -430,8 +430,11 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
 def get_carrinhos_abandonados(dias: int = 7):
     headers = get_headers()
     hoje = get_now_br()
-    data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
-    data_fim = (hoje + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Colocamos "00:00:00" para pegar desde o primeiro segundo do dia inicial
+    data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
+    
+    # A SOLUÇÃO: Passamos o dia de hoje com a HORA EXATA DE AGORA
+    data_fim = hoje.strftime("%Y-%m-%d %H:%M:%S")
 
     res = requests.get(
         f"{BASE_URL}/v2/site/carrinho", 
