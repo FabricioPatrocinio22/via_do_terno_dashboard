@@ -423,12 +423,107 @@ def get_dashboard_data(ano: int = 2026, dias_kpi: int = 30, dias_graficos: int =
     }
 
 
-# ==========================================
-# ROTA: CARRINHOS ABANDONADOS
-# ==========================================
 @app.get("/api/dashboard/carrinhos-abandonados")
 def get_carrinhos_abandonados(dias: int = 7):
-    headers = get_headers()
+    hoje = get_now_br()
+    data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
+    # ✅ data_fim = amanhã, garante que carrinhos de hoje entram no filtro
+    data_fim = (hoje + timedelta(days=1)).strftime("%Y-%m-%d")
+    dt_corte = (hoje - timedelta(days=dias)).date()
+
+    carrinhos_validos = []
+
+    for pagina in range(1, 6):
+        res = requests.get(
+            f"{BASE_URL}/v2/site/carrinho", 
+            auth=(USUARIO, SENHA), 
+            params={
+                "limit": 100,
+                "page": pagina,
+                "orderDirection": "desc",
+                "dataAtualizacaoInicio": data_inicio,
+                "dataAtualizacaoFim": data_fim
+            }
+        )
+        
+        if res.status_code != 200:
+            break
+
+        items = res.json().get('data', {}).get('items', [])
+        if not items:
+            break
+
+        for item in items:
+            if item.get('pedido'):
+                continue
+
+            # Filtra por dataInicio — data real de criação
+            dt_str = item.get('dataInicio', '')[:19]
+            try:
+                dt_item = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S").date()
+                if dt_item >= dt_corte:
+                    carrinhos_validos.append(item)
+            except:
+                continue
+
+        if len(items) < 100:
+            break
+
+    if not carrinhos_validos:
+        return {"carrinhos": []}
+
+    carrinhos_validos.sort(key=lambda x: x.get('dataInicio', ''), reverse=True)
+
+    def fetch_carrinho_detail(item):
+        cid = item.get('id')
+        try:
+            res_det = requests.get(
+                f"{BASE_URL}/v2/site/carrinho/{cid}/itens",
+                auth=(USUARIO, SENHA),
+                timeout=10
+            )
+            if res_det.status_code == 200:
+                dados = res_det.json().get('data', {}).get('carrinho', {})
+                pessoa = dados.get('pessoa', {})
+                
+                if not (pessoa and (pessoa.get('email') or pessoa.get('contato_principal'))):
+                    return None
+
+                dt_str = item.get('dataInicio', '')
+                try:
+                    dt_obj = datetime.strptime(dt_str[:19], "%Y-%m-%dT%H:%M:%S")
+                    data_pt = dt_obj.strftime("%d/%m/%Y %H:%M")
+                except:
+                    data_pt = dt_str
+
+                return {
+                    "id": cid,
+                    "data": data_pt,
+                    "nome": pessoa.get('nome'),
+                    "email": pessoa.get('email'),
+                    "telefone": pessoa.get('contato_principal'),
+                    "url_checkout": dados.get('url_checkout'),
+                    "total_itens": len(dados.get('itens', [])),
+                    "produtos": [
+                        {"nome": i.get('produto_nome', 'Produto'), "img": i.get('midia_url')} 
+                        for i in dados.get('itens', [])
+                    ]
+                }
+        except:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(fetch_carrinho_detail, carrinhos_validos))
+
+    leads = [r for r in results if r is not None]
+    leads.sort(key=lambda x: x["id"], reverse=True)
+
+    return {"carrinhos": leads[:30]}
+
+
+@app.get("/api/dashboard/carrinhos-abandonados-debug")
+def debug_carrinhos(dias: int = 7):
     hoje = get_now_br()
     data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
     data_fim = hoje.strftime("%Y-%m-%d")
@@ -436,63 +531,16 @@ def get_carrinhos_abandonados(dias: int = 7):
     res = requests.get(
         f"{BASE_URL}/v2/site/carrinho", 
         auth=(USUARIO, SENHA), 
-        params={
-            "limit": 100, 
-            "order": "id",
-            "orderDirection": "desc", 
-            "dataAtualizacaoInicio": data_inicio,
-            "dataAtualizacaoFim": data_fim
-        }
+        params={"limit": 10, "page": 1, "orderDirection": "desc",
+                "dataAtualizacaoInicio": data_inicio, "dataAtualizacaoFim": data_fim}
     )
     
-    if res.status_code != 200:
-        return {"carrinhos": []}
-
-    itens_brutos = res.json().get('data', {}).get('items', [])
+    items = res.json().get('data', {}).get('items', [])
     
-    itens_resumo = [item for item in itens_brutos if not item.get('pedido')]
-
-    leads_encontrados = []
-
-    def fetch_carrinho_detail(item):
-        cid = item.get('id')
-        try:
-            res_det = requests.get(f"{BASE_URL}/v2/site/carrinho/{cid}/itens", auth=(USUARIO, SENHA), timeout=10)
-            if res_det.status_code == 200:
-                dados = res_det.json().get('data', {}).get('carrinho', {})
-                pessoa = dados.get('pessoa', {})
-                
-                if pessoa and (pessoa.get('email') or pessoa.get('contato_principal')):
-                    dt_str = dados.get('ultima_atualizacao', item.get('dataAtualizacao', ''))
-                    try:
-                        dt_obj = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S")
-                        data_pt = dt_obj.strftime("%d/%m/%Y %H:%M")
-                    except:
-                        data_pt = dt_str
-
-                    return {
-                        "id": cid,
-                        "data": data_pt,
-                        "nome": pessoa.get('nome'),
-                        "email": pessoa.get('email'),
-                        "telefone": pessoa.get('contato_principal'),
-                        "url_checkout": dados.get('url_checkout'),
-                        "total_itens": len(dados.get('itens', [])),
-                        "produtos": [
-                            {"nome": i.get('produto_nome', 'Produto'), "img": i.get('midia_url')} 
-                            for i in dados.get('itens', [])
-                        ]
-                    }
-        except: pass
-        return None
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(fetch_carrinho_detail, itens_resumo))
-        leads_encontrados = [r for r in results if r is not None]
-
-    leads_encontrados.sort(key=lambda x: x["id"], reverse=True)
-
-    return {"carrinhos": leads_encontrados}
+    # Mostra só as datas de todos os itens
+    datas = [{"id": i.get('id'), "dataInicio": i.get('dataInicio'), "dataAtualizacao": i.get('dataAtualizacao')} for i in items]
+    print(json.dumps(datas, indent=2))
+    return {"datas": datas, "periodo_filtrado": f"{data_inicio} até {data_fim}"}
 
 # ==========================================
 # ROTA: DEMOGRAFIA (COM AMOSTRAGEM E PROGRESSO)

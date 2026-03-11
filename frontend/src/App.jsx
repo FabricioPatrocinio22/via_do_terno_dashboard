@@ -106,7 +106,7 @@ function App() {
         setLoading(false);
       }
       else if (abaAtiva === 'carrinhos') {
-        const res = await axios.get(`${BASE_API}/api/dashboard/carrinhos-abandonados?dias=30`);
+        const res = await axios.get(`${BASE_API}/api/dashboard/carrinhos-abandonados?dias=7`);
         setDataCarrinhos(res.data);
         setLoading(false);
       }
