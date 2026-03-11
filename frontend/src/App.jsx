@@ -83,8 +83,8 @@ function App() {
     setLoading(true);
 
     try {
-      const BASE_API = "https://api-viadoterno.onrender.com";
-      //const BASE_API = "http://localhost:8000";
+      //const BASE_API = "https://api-viadoterno.onrender.com";
+      const BASE_API = "http://localhost:8000";
 
       if (abaAtiva === 'analitico') {
         let url = `${BASE_API}/api/dashboard/resumo?ano=${ano}&dias_kpi=${periodoKpi}&dias_graficos=${periodoGraficos}`;
@@ -323,8 +323,8 @@ function LoginPage({ onLoginSuccess }) {
     setError('');
 
     try {
-      await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
-      //await axios.post('http://localhost:8000/api/login', { username, password });
+      //await axios.post('https://api-viadoterno.onrender.com/api/login', { username, password });
+      await axios.post('http://localhost:8000/api/login', { username, password });
       localStorage.setItem('via_token', 'logado_com_sucesso');
       onLoginSuccess();
     } catch (err) {
