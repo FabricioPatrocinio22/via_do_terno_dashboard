@@ -431,7 +431,7 @@ def get_carrinhos_abandonados(dias: int = 7):
     headers = get_headers()
     hoje = get_now_br()
     data_inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
-    data_fim = hoje.strftime("%Y-%m-%d")
+    data_fim = (hoje + timedelta(days=1)).strftime("%Y-%m-%d")
 
     res = requests.get(
         f"{BASE_URL}/v2/site/carrinho", 
