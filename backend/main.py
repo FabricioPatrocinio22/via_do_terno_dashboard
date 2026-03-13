@@ -127,6 +127,7 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
 
     total_faturamento = 0.0
     total_pedidos = 0
+    total_estorno = 0.0  # <--- Cofre de devoluções
     produtos_vendidos = [] 
     vendas_por_categoria = defaultdict(float)
     vendas_por_forma_pagamento = defaultdict(float)
@@ -147,34 +148,52 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
         
         for p_resumo in items:
             try:
-                # Extrai a data blindada
                 data_str = p_resumo.get('dataHora', '')[:10]
                 dt_pedido = datetime.strptime(data_str, "%Y-%m-%d")
                 
-                # TRAVA MANUAL 1: Passou do mês anterior? PARA a busca inteira!
                 if dt_pedido.date() < data_inicio_busca.date():
                     continuar = False
                     break
                 
-                # TRAVA MANUAL 2: Se escolheu um mês antigo, ignora os dias do futuro
                 if dt_pedido.date() > ultimo_dia_mes_date.date():
                     continue
 
-                situacao = p_resumo.get('pedidoSituacaoDescricao', '').lower()
-                if 'cancelado' in situacao: continue
+                situacao_desc = str(p_resumo.get('pedidoSituacaoDescricao') or '').lower()
+                situacao_id = p_resumo.get('pedidoSituacao') or p_resumo.get('situacao') 
                 
                 valor_total = float(p_resumo.get('valorTotal') or 0)
                 valor_frete = float(p_resumo.get('valorFrete') or 0)
                 valor = valor_total - valor_frete
+
+                # ==========================================
+                # REGRAS DE OURO DA SITUAÇÃO (ATUALIZADAS)
+                # ==========================================
+                is_estorno = (situacao_id == 17) or ('devolvido financeiro' in situacao_desc) or ('estorno' in situacao_desc)
+                is_aguardando = ('aguardando' in situacao_desc) or ('pendente' in situacao_desc)
+                is_cancelado = 'cancelado' in situacao_desc
                 
                 # ---> MÊS ATUAL
                 if dt_pedido.month == alvo_mes and dt_pedido.year == alvo_ano:
+                    if is_estorno:
+                        total_estorno += valor
+                        # Adicionamos na lista de pedidos com a nomenclatura exata
+                        pedidos_detalhados.append({
+                            "codigo": str(p_resumo.get('codigo')),
+                            "data": dt_pedido.strftime("%d/%m/%Y"),
+                            "valor": valor, 
+                            "situacao": p_resumo.get('pedidoSituacaoDescricao', 'DEVOLVIDO FINANCEIRO').upper(),
+                            "cliente": "Verificar Cliente"
+                        })
+                        continue 
+                        
+                    elif is_aguardando or is_cancelado:
+                        continue 
+
+                    # SE CHEGOU AQUI, É PORQUE ESTÁ CONFIRMADO/ENTREGUE!
                     total_faturamento += valor
                     total_pedidos += 1
                     vendas_por_dia[dt_pedido.day]["valor"] += valor
                     vendas_por_dia[dt_pedido.day]["qtd"] += 1
-                    
-                    if 'aguardando' in situacao: continue
 
                     codigo_p = str(p_resumo.get('codigo'))
                     if codigo_p not in cache:
@@ -212,8 +231,9 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
 
                 # ---> MÊS ANTERIOR 
                 elif dt_pedido.month == mes_anterior and dt_pedido.year == ano_anterior:
-                    faturamento_anterior += valor
-                    pedidos_anterior += 1
+                    if not is_estorno and not is_aguardando and not is_cancelado:
+                        faturamento_anterior += valor
+                        pedidos_anterior += 1
 
             except: continue
 
@@ -262,6 +282,7 @@ def get_mes_atual_data(meta_mensal: float = 60000, mes: int = None, ano: int = N
         "resumo": {
             "mes_ano": mes_ano_formatado,
             "total_faturamento": total_faturamento,
+            "total_estorno": total_estorno,
             "total_pedidos": total_pedidos,
             "ticket_medio": ticket_medio_atual,
             "faturamento_anterior": faturamento_anterior,
